@@ -1,0 +1,44 @@
+# Run Terminus-2 against a few LHTB tasks via the Anthropic API (ANTHROPIC_API_KEY).
+#
+#   export ANTHROPIC_API_KEY=sk-ant-...         # YOUR key — never commit it
+#   export DOCKER_DEFAULT_PLATFORM=linux/amd64
+#   harbor run -c configs/examples/terminus2_claude.yaml
+#
+# Swap model_name for another Claude model (e.g. anthropic/claude-opus-5-5).
+# Keep secrets in the environment — do not
+# hard-code api_key in this file.
+
+job_name: lhtb-claude-sample
+jobs_dir: ./jobs
+n_attempts: 1
+n_concurrent_trials: 2
+timeout_multiplier: 1.0
+
+environment:
+  type: docker
+  force_build: false
+  delete: true
+
+agents:
+  - name: terminus-2
+    # Example model id. Change to the model you want to evaluate.
+    model_name: anthropic/claude-sonnet-5-5
+    override_timeout_sec: 5400
+    kwargs:
+      parser_name: json
+      temperature: 1
+      enable_summarize: true
+      proactive_summarization_threshold: 8000
+      record_terminal_session: true
+      llm_call_kwargs:
+        # Harbor / LiteLLM read ANTHROPIC_API_KEY from the environment.
+        # Do NOT put a real key here.
+        temperature: 1
+        max_tokens: 8192
+
+datasets:
+  - path: ./tasks
+    task_names:
+      - langchain-version-migration
+      - commit0-multilib-tdd
+      - duckdb-optimizer-closure

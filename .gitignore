@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+LHTB/
+jobs/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store

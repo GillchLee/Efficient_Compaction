@@ -1,0 +1,154 @@
+diff --git a/harbor/src/harbor/agents/terminus_2/terminus_2.py b/harbor/src/harbor/agents/terminus_2/terminus_2.py
+index bcd0473..6191371 100644
+--- a/harbor/src/harbor/agents/terminus_2/terminus_2.py
++++ b/harbor/src/harbor/agents/terminus_2/terminus_2.py
+@@ -1068,11 +1068,26 @@ so ask everything you need to know."""
+ 
+                     short_prompt = f"Briefly continue this task: {original_instruction}\n\nCurrent state: {limited_screen}\n\nNext steps (2-3 sentences):"
+ 
+-                    short_llm_response: LLMResponse = await self._llm.call(
++                    # Through _run_subagent so its tokens and cost are recorded
++                    short_llm_response, short_trajectory_ref = await self._run_subagent(
+                         prompt=short_prompt,
+-                        **self._llm_call_kwargs,
++                        message_history=[],
++                        steps=[],
++                        session_id=(
++                            f"{self._session_id}-summarization-"
++                            f"{self._summarization_count}-short"
++                        ),
++                        agent_name="terminus-2-summarization-short",
++                        filename_suffix="short",
++                        summary_text=(
++                            f"Context summarization {self._summarization_count}: "
++                            "short fallback summary"
++                        ),
++                        subagent_name_for_logging="short summary LLM call",
+                     )
++                    self._pending_subagent_refs = [short_trajectory_ref]
+                     summary_prompt = f"{original_instruction}\n\nSummary: {short_llm_response.content}"
++                    self._pending_handoff_prompt = summary_prompt
+                     self.logger.debug("SUMMARIZATION: Short summary succeeded")
+                 except Exception as e:
+                     self.logger.error(f"SUMMARIZATION: Short summary failed: {e}")
+@@ -1337,6 +1352,7 @@ so ask everything you need to know."""
+             tokens_before_input = chat.total_input_tokens
+             tokens_before_output = chat.total_output_tokens
+             tokens_before_cache = chat.total_cache_tokens
++            tokens_before_cache_creation = chat.total_cache_creation_tokens
+             cost_before = chat.total_cost
+ 
+             (
+@@ -1448,6 +1464,10 @@ so ask everything you need to know."""
+                             cached_tokens=cache_tokens_used
+                             if cache_tokens_used > 0
+                             else None,
++                            extra={
++                                "cache_creation_tokens": chat.total_cache_creation_tokens
++                                - tokens_before_cache_creation
++                            },
+                             cost_usd=step_cost if step_cost > 0 else None,
+                             prompt_token_ids=llm_response.prompt_token_ids,
+                             completion_token_ids=llm_response.completion_token_ids,
+@@ -1582,6 +1602,10 @@ so ask everything you need to know."""
+                         cached_tokens=cache_tokens_used
+                         if cache_tokens_used > 0
+                         else None,
++                        extra={
++                            "cache_creation_tokens": chat.total_cache_creation_tokens
++                            - tokens_before_cache_creation
++                        },
+                         cost_usd=step_cost if step_cost > 0 else None,
+                         prompt_token_ids=llm_response.prompt_token_ids,
+                         completion_token_ids=llm_response.completion_token_ids,
+@@ -1883,6 +1907,9 @@ so ask everything you need to know."""
+                         prompt_tokens=usage_info.prompt_tokens,
+                         completion_tokens=usage_info.completion_tokens,
+                         cached_tokens=usage_info.cache_tokens,
++                        extra={
++                            "cache_creation_tokens": usage_info.cache_creation_tokens
++                        },
+                         cost_usd=usage_info.cost_usd
+                         if usage_info.cost_usd > 0
+                         else None,
+diff --git a/harbor/src/harbor/llms/chat.py b/harbor/src/harbor/llms/chat.py
+index 51eddf3..71eae99 100644
+--- a/harbor/src/harbor/llms/chat.py
++++ b/harbor/src/harbor/llms/chat.py
+@@ -12,6 +12,7 @@ class Chat:
+         self._cumulative_input_tokens = 0
+         self._cumulative_output_tokens = 0
+         self._cumulative_cache_tokens = 0
++        self._cumulative_cache_creation_tokens = 0
+         self._cumulative_cost = 0.0
+         self._prompt_token_ids_list: list[list[int]] = []
+         self._completion_token_ids_list: list[list[int]] = []
+@@ -32,6 +33,10 @@ class Chat:
+     def total_cache_tokens(self) -> int:
+         return self._cumulative_cache_tokens
+ 
++    @property
++    def total_cache_creation_tokens(self) -> int:
++        return self._cumulative_cache_creation_tokens
++
+     @property
+     def total_cost(self) -> float:
+         return self._cumulative_cost
+@@ -104,6 +109,7 @@ class Chat:
+             self._cumulative_input_tokens += usage.prompt_tokens
+             self._cumulative_output_tokens += usage.completion_tokens
+             self._cumulative_cache_tokens += usage.cache_tokens
++            self._cumulative_cache_creation_tokens += usage.cache_creation_tokens
+             self._cumulative_cost += usage.cost_usd
+ 
+         # Accumulate rollout details from the response
+diff --git a/harbor/src/harbor/llms/lite_llm.py b/harbor/src/harbor/llms/lite_llm.py
+index 7442a5f..af16f5f 100644
+--- a/harbor/src/harbor/llms/lite_llm.py
++++ b/harbor/src/harbor/llms/lite_llm.py
+@@ -579,12 +579,21 @@ class LiteLLM(BaseLLM):
+ 
+             # Get cache tokens from prompt_tokens_details.cached_tokens
+             cache_tokens = 0
++            # Cache writes: Anthropic reports usage.cache_creation_input_tokens;
++            # OpenAI reports prompt_tokens_details.cache_write_tokens
++            cache_creation_tokens = (
++                getattr(usage, "cache_creation_input_tokens", 0) or 0
++            )
+             if hasattr(usage, "prompt_tokens_details"):
+                 prompt_tokens_details = usage.prompt_tokens_details
+                 if prompt_tokens_details is not None:
+                     cache_tokens = (
+                         getattr(prompt_tokens_details, "cached_tokens", 0) or 0
+                     )
++                    if not cache_creation_tokens:
++                        cache_creation_tokens = (
++                            getattr(prompt_tokens_details, "cache_write_tokens", 0) or 0
++                        )
+ 
+             cost = self._extract_cost(response)
+ 
+@@ -592,6 +601,7 @@ class LiteLLM(BaseLLM):
+                 prompt_tokens=prompt_tokens,
+                 completion_tokens=completion_tokens,
+                 cache_tokens=cache_tokens,
++                cache_creation_tokens=cache_creation_tokens,
+                 cost_usd=cost,
+             )
+         except (AttributeError, TypeError):
+diff --git a/harbor/src/harbor/models/metric/usage_info.py b/harbor/src/harbor/models/metric/usage_info.py
+index 2a526c4..2ffa712 100644
+--- a/harbor/src/harbor/models/metric/usage_info.py
++++ b/harbor/src/harbor/models/metric/usage_info.py
+@@ -25,6 +25,11 @@ class UsageInfo(BaseModel):
+         description="Subset of prompt tokens that were cache hits",
+         ge=0,
+     )
++    cache_creation_tokens: int = Field(
++        default=0,
++        description="Subset of prompt tokens written to the prompt cache",
++        ge=0,
++    )
+     cost_usd: float = Field(
+         ...,
+         description="Monetary cost of this API call in USD",
