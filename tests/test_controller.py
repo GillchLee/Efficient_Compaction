@@ -134,3 +134,47 @@ def test_reacquisition_floor_raises_small_windows():
     a = LimitController(ControllerConfig(**luna)).on_prompt("s", "main", 2000.0)
     b = LimitController(ControllerConfig(**luna, reacq_turns=1.5)).on_prompt("s", "main", 2000.0)
     assert b.reason == "formula" and 1.02 < b.limit / a.limit < 1.2
+
+
+def _run(cfg, incs, P0=2000.0):
+    """Feed a prompt sequence; return the turn indices at which the controller fired."""
+    ctl = LimitController(cfg)
+    fired = []
+    P = P0
+    ctl.on_prompt("s", "main", P)
+    boundary = False
+    for t, inc in enumerate(incs, start=1):
+        P += inc
+        d = ctl.on_prompt("s", "main", P, window_start_hint=boundary)
+        boundary = False
+        if d.compact_now:
+            fired.append(t)
+            ctl.note_kind("s", "summary")
+            P = 1258 + 3203
+            d = ctl.on_prompt("s", "main", P, cached=1258)
+            assert d.window_start
+    return fired
+
+
+def test_balance_rule_matches_formula_for_constant_growth_and_reacts_to_bursts():
+    base = dict(Lp=3203, L0_mode="fixed", L0_fixed=1258, alpha=10, beta=50, m=2.178, gamma=1.508,
+                summary_out=4242, g_prior=1000, g_prior_weight=1000, lookahead=1)
+    const = [1000.0] * 120
+    f_fired = _run(ControllerConfig(mode="formula", **base), const)
+    b_fired = _run(ControllerConfig(mode="balance", **base), const)
+    assert len(f_fired) >= 2 and len(b_fired) >= 2
+    # same window length (+-1 turn) once both start from L0 + Lp: the balance rule reproduces
+    # the closed-form optimum (the very first window starts lower, so compare the second)
+    assert abs((f_fired[1] - f_fired[0]) - (b_fired[1] - b_fired[0])) <= 1
+    # bursty growth: a 15K tool output early in the window. The level rule (formula) fires as
+    # soon as the prompt passes L*, i.e. right after the burst; the balance rule waits until
+    # the rent actually paid for re-reading it reaches C (DTAP: no bet on the future, 2-competitive)
+    burst = [1000.0] * 3 + [15000.0] + [1000.0] * 116
+    f_b = _run(ControllerConfig(mode="formula", **base), burst)
+    b_b = _run(ControllerConfig(mode="balance", **base), burst)
+    assert f_b[0] < b_b[0] < f_fired[0]
+    # the decision record carries rent and C
+    ctl = LimitController(ControllerConfig(mode="balance", **base))
+    ctl.on_prompt("s", "main", 2000.0)
+    d = ctl.on_prompt("s", "main", 3000.0)
+    assert d.rent == 1000.0 and d.C is not None and d.C > 200000 and d.reason == "balance_ref"

@@ -161,6 +161,7 @@ def main() -> int:
         policies.append((f"fixed:{L}", config_from_spec({**base, "mode": "fixed", "fixed_limit": L, "lookahead": 0})))
     if not a.no_formula:
         policies.append(("formula", config_from_spec({**base, "mode": "formula", "lookahead": 1})))
+        policies.append(("balance", config_from_spec({**base, "mode": "balance", "lookahead": 1})))
 
     rows: list[dict] = []
     for d in a.job_dirs:

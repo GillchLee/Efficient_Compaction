@@ -47,6 +47,7 @@ def main() -> int:
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--limit", help="N tokens, or 'native'")
     g.add_argument("--formula", metavar="PRIOR", help="optlimit formula mode with this prior")
+    g.add_argument("--balance", metavar="PRIOR", help="optlimit balance (DTAP) mode with this prior")
     g.add_argument("--native-threshold", type=int, metavar="N")
     ap.add_argument("--prices", help="configs/prices.json row (formula mode)")
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
@@ -71,6 +72,8 @@ def main() -> int:
         cond, agent_kind = f"thr{a.native_threshold // 1000}k", "stock"
     elif a.formula:
         cond, agent_kind = f"formula_{a.formula}", "optlimit"
+    elif a.balance:
+        cond, agent_kind = f"balance_{a.balance}", "optlimit"
     elif a.limit == "native":
         cond, agent_kind = "native", "optlimit"
     else:
@@ -90,8 +93,8 @@ def main() -> int:
     if a.temperature is not None:
         kwargs["temperature"] = a.temperature
     if agent_kind == "optlimit":
-        if a.formula:
-            ol = {"mode": "formula", "prior": a.formula, "lookahead": 1}
+        if a.formula or a.balance:
+            ol = {"mode": "formula" if a.formula else "balance", "prior": a.formula or a.balance, "lookahead": 1}
             if a.prices:
                 ol["prices"] = a.prices
         elif a.limit == "native":

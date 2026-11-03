@@ -29,6 +29,14 @@ follow the ratios instead of freezing them at start-up:
   actual hand-off size and cache behaviour of this model/harness.
 
 Every Decision carries the alpha/beta/gamma/Lp/summary_out it was computed with.
+
+Balance mode (`mode: balance`) is the Dynamic-TCP-Acknowledgment rule applied to
+compaction: every turn of a window re-reads the tokens accumulated since the window
+started (its "rent", P_t - P_start, in cache-read units); compacting costs C once.
+Compact when the accumulated rent of the window reaches C.  With constant growth this
+fires at exactly the closed-form L*; with bursty growth it reacts to the tokens actually
+re-read instead of to a mean, needs no g estimate (lookahead 0), and is 2-competitive
+against the offline optimum for any increment sequence (Dooly-Goldman-Scott 2001).
 """
 from __future__ import annotations
 
@@ -36,13 +44,13 @@ import math
 import time
 from dataclasses import dataclass, field, asdict, replace
 
-from .cost_model import Params, best_threshold, f, min_L, should_compact_now
+from .cost_model import Params, best_threshold, f, min_L, order_cost, should_compact_now
 from .estimator import GEstimator
 
 
 @dataclass
 class ControllerConfig:
-    mode: str = "formula"          # formula | fixed | off
+    mode: str = "formula"          # formula | balance | fixed | off
     fixed_limit: float | None = None
     # cost-model parameters (prices in units of cache read)
     Lp: float = 8000.0
@@ -95,6 +103,8 @@ class Decision:
     gamma: float | None = None
     Lp: float | None = None
     summary_out: float | None = None
+    rent: float | None = None      # balance mode: re-read tokens accumulated in this window
+    C: float | None = None         # balance mode: cost of one compaction (read units)
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -121,6 +131,9 @@ class SessionState:
     lp_obs: list[float] = field(default_factory=list)
     so_obs: list[float] = field(default_factory=list)
     unc_obs: list[float] = field(default_factory=list)   # uncached fraction of summary-call input
+    window_start_prompt: float | None = None
+    window_turns: int = 0
+    rent: float = 0.0             # balance mode: sum over the window of (P_t - P_start)
     _summ_prompt: float = 0.0     # accumulated over the calls of the compaction in progress
     _summ_cached: float = 0.0
     _summ_out: float = 0.0
@@ -211,6 +224,20 @@ class LimitController:
         return Params(L0=L0, Lp=self.Lp(s), g=s.g.value, alpha=c.alpha, beta=c.beta, phi=c.phi,
                       m=c.m, gamma=self.gamma(s), summary_out=self.summary_out(s), summary_fixed=c.summary_fixed)
 
+    def k_min(self) -> int:
+        c = self.cfg
+        return max(c.min_window_turns, math.ceil(c.reacq_turns / c.reacq_eps) if c.reacq_turns > 0 else 0)
+
+    def compaction_cost(self, s: SessionState) -> float | None:
+        """C: the one-off cost of a compaction in cache-read units (order_cost + re-acquired turns)."""
+        p = self.params(s)
+        if p is None:
+            return None
+        C = order_cost(p)
+        if self.cfg.reacq_turns > 0:
+            C += self.cfg.reacq_turns * f(best_threshold(p), p)
+        return C
+
     def limit(self, s: SessionState) -> tuple[float | None, str]:
         c = self.cfg
         if c.mode == "off":
@@ -227,9 +254,9 @@ class LimitController:
             L_base = best_threshold(p)
             p = replace(p, summary_fixed=p.summary_fixed + c.reacq_turns * f(L_base, p))
         L = best_threshold(p)
-        k_min = max(c.min_window_turns, math.ceil(c.reacq_turns / c.reacq_eps) if c.reacq_turns > 0 else 0)
+        k_min = self.k_min()
         floor = p.L0 + self.Lp(s) + p.g * (k_min - 1)
-        reason = "formula"
+        reason = "formula" if c.mode != "balance" else "balance_ref"
         if L < floor:
             L, reason = floor, "floor_min_window"
         if c.limit_min is not None and L < c.limit_min:
@@ -259,6 +286,9 @@ class LimitController:
         window_start = False
         if s.first_prompt is None:
             s.first_prompt = prompt
+            s.window_start_prompt = prompt
+            s.window_turns = 1
+            s.rent = 0.0
         elif s.expect_boundary or window_start_hint or (
             s.last_main_prompt is not None and prompt < c.boundary_ratio * s.last_main_prompt
             and s.last_main_prompt > (s.first_prompt or 0) + 2 * s.g.value
@@ -269,15 +299,31 @@ class LimitController:
             s.cached_after_compaction = cached or s.cached_after_compaction
             s.pending_compact = False
             self._flush_compaction_obs(s, prompt, cached)
+            s.window_start_prompt = prompt
+            s.window_turns = 1
+            s.rent = 0.0
         elif s.last_main_prompt is not None:
             s.g.add(prompt - s.last_main_prompt)
+            s.window_turns += 1
+            s.rent += max(prompt - (s.window_start_prompt or prompt), 0.0)
         s.expect_boundary = False
         s.last_main_prompt = prompt
 
         limit, reason = self.limit(s)
         g_hat = s.g.value
         compact = False
-        if limit is not None and not s.pending_compact:
+        rent = C = None
+        if c.mode == "balance" and not s.pending_compact and limit is not None:
+            C = self.compaction_cost(s)
+            rent = s.rent
+            if C is not None:
+                # next turn would add (P_t + g_hat - P_start) of rent: compact before paying it
+                excess_next = max(prompt + c.lookahead * g_hat - (s.window_start_prompt or prompt), 0.0)
+                L0 = self.L0(s) or 0.0
+                if (rent + excess_next >= C and s.window_turns >= self.k_min()
+                        and prompt > L0 + self.Lp(s)):
+                    compact, reason = True, "balance"
+        elif limit is not None and not s.pending_compact:
             predicted = prompt + c.lookahead * g_hat
             L0 = self.L0(s) or 0.0
             if predicted >= limit and prompt > L0 + self.Lp(s):
@@ -292,7 +338,8 @@ class LimitController:
             s.pending_compact = True
         d = Decision(compact_now=compact, limit=limit, g_hat=g_hat, L0=self.L0(s), window_idx=s.window_idx,
                      turn_idx=s.turn_idx, window_start=window_start, reason=reason,
-                     alpha=c.alpha, beta=c.beta, gamma=self.gamma(s), Lp=self.Lp(s), summary_out=self.summary_out(s))
+                     alpha=c.alpha, beta=c.beta, gamma=self.gamma(s), Lp=self.Lp(s), summary_out=self.summary_out(s),
+                     rent=rent, C=C)
         s.last_decision = d
         s.prompts.append(prompt); s.kinds.append(kind); s.limits.append(limit)
         return d
