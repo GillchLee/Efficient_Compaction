@@ -29,11 +29,15 @@
 | B `scripts/t2_prefill_stats.py` | `analysis/prefill_stats.py` | 입력을 `turns.csv` 로 |
 | B `scripts/t2_public_feedback.py` | `analysis/public_feedback.py` | job 디렉터리 인자 |
 | B `scripts/t2_chart.py` + `lhtb_turn_cache.tpl.html` | `analysis/chart.py` + `chart.tpl.html` | 입력을 token_turns CSV 로; 조건·과제·단가가 데이터에서 나옴(템플릿의 하드코딩 제거) |
-| B `optlimit/` (cost_model, estimator, controller, dialects, proxy, cli, analysis) | `optlimit/` | 그대로 + `controller.config_from_spec()`(yaml 의 `optlimit:` 블록 → ControllerConfig, prior/prices 참조) + **`harbor_agent.py`** |
+| B `optlimit/cost_model.py`, `estimator.py`, `controller.py` | `optlimit/` | 유지 + `controller.config_from_spec()`(yaml 의 `optlimit:` 블록 → ControllerConfig, prior/prices 참조), g_prior_weight=0 이면 첫 관측 전까지 L\* 없음 |
+| B `optlimit/proxy.py`, `dialects.py`, `cli.py`, `analysis.py`, `tests/test_proxy.py`, `test_dialects_codex.py` | 삭제 | terminus-2 는 훅으로 직접 압축하므로 proxy(usage 조작·오류 응답으로 유도), 세 API dialect, proxy 로그 분석, `optlimit serve/sessions/analyze` CLI 가 모두 불필요. pyproject 의 httpx/starlette/uvicorn 의존성도 제거 |
+| B `configs/priors.json` 의 claude-code / codex / muse-code / codex-luna / public_g_tb21 | 삭제 | proxy 시절 다른 하네스의 사전값. terminus2-* 만 남김 |
+| A `configs/examples/*.yaml` | 삭제 | `make_config.py` 가 같은 설정을 만듦 |
+| B `controller.should_reject()`, `max_consecutive_rejects` | 삭제 | proxy 의 오류 응답 트리거 전용 |
 | (없음) | `optlimit/harbor_agent.py` | terminus-2 서브클래스. API prompt_tokens 로 압축 시점 결정, native `_summarize()` 호출, `optlimit_decisions.jsonl` |
 | (없음) | `analysis/fit_priors.py` | turns.csv → g, L0, Lp, φ, m, γ, summary_out → priors.json |
 | (없음) | `analysis/replay.py` | 궤적 리플레이로 nocompact / fixed:L / formula 비용 비교 + 실측 대조 |
-| B `tests/` 4개 | `tests/` 6개 | + `test_harbor_agent.py`(훅: fixed 모드 트리거·window 경계·off 모드), `test_token_turns.py` |
+| B `tests/` 4개 | `tests/` 4개 | 비용 모델·컨트롤러(+ no-prior 테스트) 유지, 프록시 2개 삭제, + `test_harbor_agent.py`(훅: fixed 모드 트리거·window 경계·off 모드), `test_token_turns.py` |
 | B `README.md`(optlimit 유도식 검토), A `README.md` | `README.md` | A 의 구성을 유지하고 optlimit 절 추가 |
 | B `cost_model_derivation2.pdf` | `docs/` | |
 | B `runs/` (27 trial), A `jobs/` | 저장소 밖 | 집계 스크립트는 job 디렉터리를 인자로 받으므로 어디 있어도 됨 |
@@ -41,13 +45,13 @@
 ## 동작이 바뀐 곳
 
 1. **압축 트리거.** 전: terminus-2 의 `proactive_summarization_threshold = 한도 − W` (litellm 로컬 토큰 수; Anthropic 은 실제 prompt 가 명목값의 ~1.5배에서 압축). 후: `OptlimitTerminus2` 가 직전 호출의 `prompt_tokens`(API 보고값) ≥ W 에서 native `_summarize()` 호출. `--native-threshold` 로 전 방식도 남겨 둠.
-2. **동적 L\*.** 전: proxy 가 usage 조작/오류 응답으로 하네스 압축을 유도(terminus-2 에는 미적용). 후: 같은 컨트롤러를 훅이 직접 호출(`mode: formula`). proxy 는 Codex·Claude Code 용으로 유지.
+2. **동적 L\*.** 전: proxy 가 usage 조작/오류 응답으로 하네스 압축을 유도(terminus-2 에는 미적용). 후: 같은 컨트롤러를 훅이 직접 호출(`mode: formula`). proxy 와 그 부속은 삭제.
 3. **토큰 집계.** 전(B): venv 안의 litellm 콜백 로그를 시간창으로 턴에 매칭. 후: 패치가 호출마다 trajectory metrics 에 기록 → 결정적. 예전 로그는 `--usage` 로 읽음.
 4. **설정.** 전: 조건마다 yaml 복제. 후: `make_config.py` 한 번.
 
 ## 검증
 
-- `pytest`: 27 passed (비용 모델·컨트롤러·프록시 기존 18 + 훅 3 + 턴 집계 3; 훅 테스트는 패치된 harbor 를 import).
+- `pytest`: 20 passed (비용 모델·컨트롤러(no-prior 포함)·훅 3·턴 집계 3; 훅 테스트는 패치된 harbor 를 import).
 - 예전 27 trial 을 `token_turns.py --usage` 로 다시 집계한 값이 B 의 `t2_turns.py` 결과와 일치: Sonnet 80K gdal 1032턴·compaction 8회(턴 76/164/298/…)·거절 297회·L_before 77–80K·write_c 9.8K/9.5K/8.9K; sqlite 948턴·6회; Luna 40K gdal 1021턴·16회 등. cache_write 는 모든 main 호출과 요약 호출(24/24)에 채워짐.
 - `fit_priors.py` (Sonnet 4 trial, 20 compaction): g 중앙값 409 / 평균 574, L0 0, Lp 9,365, m 2.14, γ 2.10, summary_out 6,857. (Luna 9 trial, 45 compaction): g 717 / 840, L0 1,258, Lp 4,399 (φ 0.027), m 2.18, γ 1.51, summary_out 4,242.
 - `replay.py`: 실제로 창 L 로 돌린 궤적을 `fixed:L` 로 리플레이한 턴당 비용이 실측과 2% 이내 (Sonnet 80K gdal 0.01477 vs 0.01501, sqlite 0.01473 vs 0.01502; Luna 40K gdal 0.00076 vs 0.00077, 120K sqlite 0.00192 vs 0.00193 $/턴). formula 정책의 L\* 평균은 Sonnet 44–49K, Luna 23–29K 로 fixed 80K 대비 턴당 7–9% 절감 예측.
@@ -55,4 +59,13 @@
 
 ## smoke 결과
 
-(실행 후 채움)
+`configs/smoke/sonnet_l20k_seismo_15min.yaml` (Sonnet 5.5, `--limit 20000`, seismo, 15분, docker):
+
+| 항목 | 값 |
+|---|---|
+| 압축 | 2회, 직전 호출의 API prompt 20,404 / 21,086 에서 발동 (설정 20,000; 초과분은 마지막 턴의 증분) |
+| 압축 직후 prompt | 10,513 / 8,991 |
+| 제출 · 중간 점수 | 4회, 모두 0.8333 → `interim_verifier.jsonl` |
+| 턴 · 비용 | 47턴, $0.80 (요약 6회 $0.21 포함) |
+
+`agent/optlimit_decisions.jsonl` 에 턴마다 prompt · cached · L · 결정 · window 가 남고 `token_turns.py` 가 `ol_limit/ol_g_hat/ol_compact` 열로 붙입니다. Anthropic 모델에서 1.53배 보정 없이 설정값에서 압축됨을 확인했습니다.

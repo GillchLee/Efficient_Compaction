@@ -6,9 +6,13 @@ The decision is taken on the *response* of turn t (prompt P_t known from usage):
     compact_now  <=>  P_t + lookahead * g_hat  >=  L*(L0, Lp, g_hat, prices)
 
 i.e. "the prompt about to be sent would exceed the threshold" (PDF definition 2),
-predicting the next prompt with the current growth estimate.  The proxy turns
-compact_now into the harness's own trigger (usage rewrite or a context-length
-error) so the harness runs its *native* compaction.
+predicting the next prompt with the current growth estimate.  optlimit.harbor_agent
+turns compact_now into terminus-2's own summarization, so the harness runs its
+*native* compaction and only the moment changes.
+
+With g_prior_weight = 0 the estimator starts from nothing: no L* is computed until
+the first growth observation (limit() returns None, reason "no_g"), after that
+g_hat is the plain (clipped) mean of the observed increments of the session.
 """
 from __future__ import annotations
 
@@ -46,8 +50,7 @@ class ControllerConfig:
     min_window_turns: int = 3      # L* >= L0 + Lp + g*(min_window_turns - 1)
     lookahead: float = 1.0
     horizon: int | None = None     # expected total turns; enables PDF 6(a) short-task rule
-    boundary_ratio: float = 0.6    # P_t < ratio * P_{t-1} => compaction happened
-    max_consecutive_rejects: int = 2
+    boundary_ratio: float = 0.6    # P_t < ratio * P_{t-1} => compaction happened (fallback detection)
 
 
 @dataclass
@@ -76,8 +79,7 @@ class SessionState:
     window_idx: int = 0
     n_compactions: int = 0
     pending_compact: bool = False  # decided; waiting for the harness to act
-    expect_boundary: bool = False  # a summary call / rejection happened: next main turn starts a window
-    consecutive_rejects: int = 0
+    expect_boundary: bool = False  # a summary call happened: next main turn starts a window
     g: GEstimator | None = None
     last_decision: Decision | None = None
     prompts: list[float] = field(default_factory=list)
@@ -130,6 +132,8 @@ class LimitController:
             return None, "off"
         if c.mode == "fixed":
             return c.fixed_limit, "fixed"
+        if c.g_prior_weight <= 0 and s.g.n == 0:
+            return None, "no_g"
         p = self.params(s)
         if p is None:
             return None, "no_L0"
@@ -144,28 +148,13 @@ class LimitController:
             L, reason = c.limit_max, "limit_max"
         return L, reason
 
-    # ------------------------------------------------------------ request side (error mode)
-    def should_reject(self, key: str, kind: str) -> bool:
-        """Error-trigger mode: reject the next main-loop request after a compact_now decision."""
-        s = self.session(key)
-        if kind != "main" or not s.pending_compact:
-            return False
-        if s.consecutive_rejects >= self.cfg.max_consecutive_rejects:
-            # the harness did not react to the error: fail open
-            s.pending_compact = False
-            s.consecutive_rejects = 0
-            return False
-        s.consecutive_rejects += 1
-        s.expect_boundary = True
-        return True
-
     def note_kind(self, key: str, kind: str) -> None:
         s = self.session(key)
         if kind == "summary":
             s.expect_boundary = True
             s.pending_compact = False
 
-    # ------------------------------------------------------------ response side
+    # ------------------------------------------------------------ window boundaries
     def on_prompt(self, key: str, kind: str, prompt: float, cached: float = 0.0,
                   window_start_hint: bool = False) -> Decision:
         """Called as soon as the prompt size of a response is known."""
@@ -176,7 +165,6 @@ class LimitController:
                          g_hat=s.g.value, L0=self.L0(s), window_idx=s.window_idx, turn_idx=s.turn_idx,
                          reason=kind)
             return d
-        s.consecutive_rejects = 0
         s.turn_idx += 1
         window_start = False
         if s.first_prompt is None:

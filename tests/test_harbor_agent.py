@@ -14,9 +14,10 @@ from optlimit.harbor_agent import OptlimitTerminus2  # noqa: E402
 def test_config_from_spec_prior_prices_and_unknown_key():
     cfg = config_from_spec({"mode": "fixed", "fixed_limit": 80000, "lookahead": 0})
     assert cfg.mode == "fixed" and cfg.fixed_limit == 80000 and cfg.lookahead == 0
-    cfg = config_from_spec({"mode": "formula", "prior": "codex", "prices": "claude-sonnet-5-5", "g_prior_weight": 3})
-    assert cfg.Lp == 16000 and cfg.g_prior == 1900 and cfg.L0_mode == "fixed" and cfg.L0_fixed == 11800
-    assert cfg.alpha == 25.0 and cfg.beta == 100.0 and cfg.g_prior_weight == 3
+    cfg = config_from_spec({"mode": "formula", "prior": "terminus2-gpt-6-luna", "prices": "gpt-6-luna", "g_prior_weight": 3})
+    assert cfg.Lp == 3203 and cfg.g_prior == 717 and cfg.L0_mode == "fixed" and cfg.L0_fixed == 1258
+    assert cfg.m == 2.178 and cfg.phi == 0.0267 and cfg.g_prior_weight == 3
+    assert cfg.alpha == 10.0 and cfg.beta == 50.0
     with pytest.raises(ValueError):
         config_from_spec({"mode": "fixed", "fixed_limt": 1})
 

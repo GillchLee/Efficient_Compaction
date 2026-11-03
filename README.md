@@ -17,7 +17,7 @@ patches/harbor-token-and-summary-tracking.patch
                               Harbor 수정 (6개 파일, 아래 표)
 configs/
   make_config.py              모델·압축 조건·환경(docker/daytona)·과제·시간을 받아 job yaml 생성
-  sweep/ smoke/ examples/     생성된(또는 손으로 쓴) job 설정
+  sweep/ smoke/               생성된(또는 손으로 쓴) job 설정
   prices.json                 모델별 단가 ($/M: cache read / cache write / uncached / output)
   priors.json                 모델별 비용 모델 파라미터 (analysis/fit_priors.py 가 채움)
 scripts/
@@ -36,10 +36,8 @@ optlimit/                     압축 임계값 결정 (pip install -e .)
   cost_model.py               f(L), 닫힌 해, 수치 최적화, 단기 규칙
   estimator.py                온라인 g 추정 (prior 로 수축한 평균 / 중앙값 / EMA)
   controller.py               세션 상태: L0 관측, g 갱신, L* 계산, "지금 압축" 결정; config_from_spec()
-  harbor_agent.py             terminus-2 서브클래스: API 가 보고한 prompt 토큰으로 압축 시점 결정 (proxy 불필요)
-  proxy.py dialects.py cli.py analysis.py
-                              terminus-2 밖의 하네스(Codex, Claude Code)용 투명 프록시와 그 로그 분석
-tests/                        비용 모델 · 컨트롤러 · 프록시 · 훅 · 턴 집계 테스트 (pytest)
+  harbor_agent.py             terminus-2 서브클래스: API 가 보고한 prompt 토큰으로 압축 시점 결정
+tests/                        비용 모델 · 컨트롤러 · 훅 · 턴 집계 테스트 (pytest)
 docs/cost_model_derivation2.pdf  비용 모델 유도
 ```
 
@@ -72,7 +70,8 @@ python configs/make_config.py --model anthropic/claude-sonnet-5-5 --limit 80000 
     --tasks-dir ./LHTB/tasks-2.0 --tasks gdal_antimeridian_clip__01 sqlite_wal_recovery_audit__02 \
     --env docker --hours 3                        # -> configs/sweep/sonnet-5-5_l80k.yaml
 python configs/make_config.py --model openai/gpt-6-luna --limit native --env daytona --tasks 2048 chess-mate
-python configs/make_config.py --model anthropic/claude-sonnet-5-5 --formula terminus2-sonnet-5-5 --prices claude-sonnet-5-5 ...
+python configs/make_config.py --model openai/gpt-6-luna --formula terminus2-gpt-6-luna --prices gpt-6-luna \
+    --set g_prior_weight=0 --tasks-dir ./LHTB/tasks-2.0 --tasks gdal_antimeridian_clip__01 ...   # 동적 L*, Lp 고정, g 는 관측만
 
 # 2. 실행 (같은 명령을 다시 실행하면 기존 job 을 이어서 진행)
 bash scripts/run_job.sh configs/sweep/sonnet-5-5_l80k.yaml
@@ -96,7 +95,7 @@ python analysis/chart.py jobs/sonnet-5-5_* jobs/luna_ctx* --out jobs/chart.html
 |---|---|---|---|
 | `--limit N` | `OptlimitTerminus2` (mode fixed) | 직전 호출에서 API 가 보고한 `prompt_tokens` ≥ N | 창 크기 sweep. 어떤 제공자든 정확히 N 에서 압축 |
 | `--limit native` | `OptlimitTerminus2` (mode off) | terminus-2 기본값(남은 컨텍스트 < 8000) | 기준선. 턴별 결정 로그는 남음 |
-| `--formula PRIOR --prices ROW` | `OptlimitTerminus2` (mode formula) | 매 턴 L\* = argmin f_B(L) 를 다시 계산, P_t + ĝ ≥ L\* 이면 압축 | 동적 임계값 |
+| `--formula PRIOR --prices ROW` | `OptlimitTerminus2` (mode formula) | 매 턴 L\* = argmin f_B(L) 를 다시 계산, P_t + ĝ ≥ L\* 이면 압축 | 동적 임계값. `--set g_prior_weight=0` 이면 g 는 사전 정보 없이 세션에서 관측한 증분의 평균만 쓰고, 첫 증분을 보기 전에는 압축하지 않음 |
 | `--native-threshold N` | stock terminus-2 | litellm 로컬 토큰 수 기준 `proactive_summarization_threshold` | 예전 sweep 재현용 |
 
 `OptlimitTerminus2` 는 terminus-2 가 매 에피소드 시작에 부르는 `_check_proactive_summarization()` 하나만 바꿉니다. 컨트롤러가 "지금 압축"이라고 하면 terminus-2 의 `_summarize()`(3단계 요약 호출)를 그대로 부르므로 압축 메커니즘·비용 구조는 native 와 같고 **시점**만 달라집니다. 판단에 쓰는 값은 Harbor 패치가 `Chat.last_usage` 에 남기는 API 응답의 `prompt_tokens`·`cache_read` 라서, litellm 의 로컬 토크나이저가 Anthropic 프롬프트를 약 1.5배 적게 세는 문제(`--native-threshold` 방식의 L_before ≈ 1.5 × 명목값)가 없습니다. 기본 임계값(8000)은 안전망으로 그대로 둡니다. 결정은 `<trial>/agent/optlimit_decisions.jsonl` 에 턴마다 기록되고 `token_turns.py` 가 `ol_limit`, `ol_g_hat`, `ol_compact` 열로 붙입니다.

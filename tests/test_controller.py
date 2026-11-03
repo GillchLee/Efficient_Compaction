@@ -50,15 +50,23 @@ def test_boundary_detected_from_prompt_drop_without_hint():
     assert d.window_start
 
 
-def test_error_mode_reject_once_then_fail_open():
-    ctl = LimitController(ControllerConfig(mode="fixed", fixed_limit=5000, Lp=500, g_prior=1000, max_consecutive_rejects=2))
-    ctl.on_prompt("k", "main", 1000.0)
-    ctl.on_prompt("k", "main", 4500.0)
-    assert ctl.is_pending("k")
-    assert ctl.should_reject("k", "main")
-    assert ctl.should_reject("k", "main")
-    assert not ctl.should_reject("k", "main")  # fail open after 2
-    assert not ctl.is_pending("k")
+def test_no_prior_waits_for_first_growth_then_uses_observed_mean():
+    ctl = LimitController(ControllerConfig(mode="formula", Lp=4400, alpha=10, beta=50, m=2, summary_out=4200,
+                                           g_prior=5000, g_prior_weight=0, min_window_turns=2))
+    d = ctl.on_prompt("k", "main", 1300.0)
+    assert d.limit is None and d.reason == "no_g" and not d.compact_now
+    d = ctl.on_prompt("k", "main", 2000.0)          # first observed increment: 700
+    assert d.limit is not None and abs(d.g_hat - 700) < 1e-6
+    expect = cm.best_threshold(cm.Params(L0=1300, Lp=4400, g=700, alpha=10, beta=50, m=2, summary_out=4200))
+    assert abs(d.limit - expect) < 1
+    P, fired = 2000.0, None
+    for t in range(500):
+        P += 700
+        d = ctl.on_prompt("k", "main", P)
+        if d.compact_now:
+            fired = (P, d.limit)
+            break
+    assert fired is not None and fired[0] + 700 >= fired[1] > fired[0] - 700
 
 
 def test_fixed_mode_lookahead():

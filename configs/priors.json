@@ -1,5 +1,5 @@
 {
- "_note": "Medians from the earlier measurements (data/prior_results/g_lp_anatomy.html, cc_compaction.html). Lp = prompt right after compaction (full, incl. the cached fixed prefix); L0 = fixed prefix that stays cached across compaction; g = per-turn prompt growth (model tokenizer); m = number of full-context reads by the summary call(s); summary_out = summary output tokens per compaction. Use as priors / sweep starting points, not as truths for a new model.",
+ "_note": "Cost-model parameters per model for terminus-2 (units: tokens). L0 = part of the post-compaction prompt that is still a cache hit, Lp = part written anew (L0 + Lp = prompt right after compaction), g = prompt growth per turn (median), m = full-context reads by the summarization calls, gamma = price multiplier of those reads relative to a cache read, summary_out = their output tokens, phi = Lp slope in L. Entries written by analysis/fit_priors.py; the qwen27b ones are older local vLLM measurements.",
  "harness": {
   "terminus2-qwen27b-think": {
    "source": "local TC16/TC72 (Qwen3.8-27B vLLM, thinking on)",
@@ -20,46 +20,6 @@
    "gamma": 1.0,
    "summary_out": 1000,
    "_detail": "summary degenerates to JSON action format in 70% of cases; keep thinking on for the 3 summary calls."
-  },
-  "claude-code": {
-   "source": "Harbor Hub TB4.0 / Science: GLM-5.3-Flash, Qwen3.8-Max, Kimi K3, Sonnet 5",
-   "Lp": 32000,
-   "L0": 16900,
-   "g": 2100,
-   "m": 1,
-   "gamma": 1.0,
-   "summary_out": 4400,
-   "_detail": "Lp 27.9-32.8K = fixed prefix 16.9K (cache hit in 22/37) + summary 4.4K + unrecorded re-attachments ~14K; cache misses after compaction in 8/37 (Kimi) .. 29/54 (GLM)."
-  },
-  "codex": {
-   "source": "Harbor Hub TB4.0 / Science: GPT-5.6 Sol/Terra/Luna, GPT-6 Astra",
-   "Lp": 16000,
-   "L0": 11800,
-   "g": 1900,
-   "m": 1,
-   "gamma": 1.0,
-   "summary_out": 4500,
-   "_detail": "Lp 14.3-19.3K; cache hit after compaction 9.9-12.4K (fixed prefix), new write 3.1-6.7K; g 0.6-3.4K depending on model; compacts at ~244K natively (90% of 272K)."
-  },
-  "muse-code": {
-   "source": "Harbor Hub TB4.0 Muse Spark 1.3",
-   "Lp": 35300,
-   "L0": 26600,
-   "g": 1723,
-   "m": 1,
-   "gamma": 1.0,
-   "summary_out": 2800,
-   "_detail": "Lp grows ~+1.5K per compaction (preserved recent segment); phi > 0 candidate."
-  },
-  "codex-luna": {
-   "source": "Harbor Hub tb40lp CX40_GPT-6_Luna (codex 0.159, 12 trajectories, 24 native compactions at ~244.8K = 272K*0.9)",
-   "Lp": 14900,
-   "L0": 12000,
-   "g": 870,
-   "m": 1,
-   "gamma": 1.0,
-   "summary_out": null,
-   "_detail": "L0 median 12053 (base instructions+tools+env+task); Lp median 14886 after native compaction; g median 868 / mean 2023 per step (q25 252, q75 2738); next-input growth ~= 1.09 x completion so encrypted reasoning is re-read every turn; reasoning ~49% of completion tokens. summary_out unknown (compaction request not logged in ATIF)."
   },
   "terminus2-sonnet-5-5": {
    "source": "fit_priors.py over 4 trials, 20 compactions",
@@ -83,15 +43,5 @@
    "phi": 0.0267,
    "_detail": "L0 = median cache read at the first compacted turn, Lp = median cache write there (full post-compaction prompt 5694); g median 717 / mean 840 (q25 147, q75 1202); L_before median 40582; summarization input 2.178 x L, uncached fraction 0.056; first prompt 1261."
   }
- },
- "public_g_tb21": {
-  "_note": "no-compaction g medians, model tokenizer, Harbor Hub TB2.1 (445 trials/row)",
-  "Claude_Code_Fable_5_xhigh": 820,
-  "Codex_GPT_6_Astra_high": 601,
-  "Terminus_2_Fable_5_high": 824,
-  "Terminus_2_GPT_5.5_xhigh": 1172,
-  "Terminus_2_Gemini_3.1_Pro_high": 988,
-  "Terminus_2_Gemini_3_Pro_high": 1080,
-  "Terminus_2_Opus_4.7_max": 862
  }
 }
