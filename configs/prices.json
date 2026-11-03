@@ -1,0 +1,70 @@
+{
+  "_note": "$ per million tokens. read = cache read, write = cache write (Anthropic 1.25x input; OpenAI-style APIs have no write premium so write = input), uncached = plain input price when different from write (Anthropic). alpha = write/read, beta = output/read. Verify against the provider's current price page before an API run; the Qwen and Claude Sonnet rows come from the earlier project notes.",
+  "models": {
+    "qwen3.8-flash": {
+      "read": 0.016,
+      "write": 0.2,
+      "output": 0.47,
+      "_source": "Model Studio (DashScope) note 2026-10-25: input $0.15 cache-write $0.20 cache-read $0.016 output $0.47",
+      "uncached": 0.15
+    },
+    "local-sonnet-like": {
+      "read": 0.3,
+      "write": 3.75,
+      "output": 15.0,
+      "_source": "price ratios used in the earlier local-vLLM reports (R 0.30 / W 3.75 / O 15)"
+    },
+    "claude-sonnet-4.5": {
+      "read": 0.3,
+      "write": 3.75,
+      "output": 15.0,
+      "uncached": 3.0
+    },
+    "claude-haiku-4.5": {
+      "read": 0.1,
+      "write": 1.25,
+      "output": 5.0,
+      "uncached": 1.0
+    },
+    "gemini-3.8-flash": {
+      "read": 0.075,
+      "write": 0.75,
+      "output": 3.75,
+      "_source": "note 2026-10-25"
+    },
+    "openai-10x": {
+      "read": 0.125,
+      "write": 1.25,
+      "output": 10.0,
+      "_source": "generic OpenAI-style ratio: cached = 0.1x input; fill in the real model row"
+    },
+    "gpt-6-luna": {
+      "read": 0.01,
+      "write": 0.1,
+      "uncached": 0.1,
+      "output": 0.5,
+      "_source": "developers.openai.com/api/docs/pricing 2026-10-29: <=272K input $0.10, cached $0.01, output $0.50 (>272K: $0.20/$0.02/$0.75); OpenAI prompt cache has no write fee -> write = uncached"
+    },
+    "glm-5.3-flash-or": {
+      "read": 0.03,
+      "write": 0.0457,
+      "uncached": 0.0457,
+      "output": 0.0742,
+      "_source": "openrouter.ai/api/v1/models 2026-10-29 z-ai/glm-5.3-flash: prompt $0.0457/M, completion $0.0742/M, input_cache_read $0.03/M, ctx 1,048,576; no cache-write fee -> write = uncached"
+    },
+    "claude-haiku-5-5": {
+      "read": 0.01,
+      "write": 0.125,
+      "uncached": 0.1,
+      "output": 0.5,
+      "_source": "claude-api skill table 2026-10-06 + litellm 1.106.6 model info: $0.10/M in, $0.01/M cache read, $0.125/M cache write (5 min), $0.50/M out for prompts <=100K; >100K: $0.50 in / $2.50 out (not modeled)"
+    },
+    "claude-sonnet-5-5": {
+      "read": 0.1,
+      "write": 2.5,
+      "uncached": 2.0,
+      "output": 10.0,
+      "_source": "platform.claude.com/docs pricing page, fetched 2026-11-03 (5m cache write; >200K long-context tier not applicable at L=80K)"
+    }
+  }
+}

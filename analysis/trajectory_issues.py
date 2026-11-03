@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Behavioral red flags per trial from terminus-2 trajectories.
 
-    python scripts/trajectory_issues.py jobs/lhtb-luna-ctx80k jobs/lhtb-luna-ctxnative [--out FILE]
+    python analysis/trajectory_issues.py jobs/<job>... [--out FILE]
 
 Per trial (main agent trajectory, copied context skipped):
   rejections        verifier rejections (binary "did not pass verification" turns)

@@ -5,7 +5,7 @@
 # with free = model context limit (922,000 for gpt-6-luna) - current prompt tokens.
 # threshold = 922,000 - window  ->  compact once the prompt passes ~80,000 tokens.
 #
-# Run all four windows with:  bash scripts/run_luna_ctx_sweep.sh
+# Run all four windows with:  bash scripts/run_sweep.sh configs/sweep/luna_ctx*.yaml
 
 job_name: lhtb-luna-smoke-ctx6k
 jobs_dir: ./jobs
@@ -36,6 +36,6 @@ agents:
         num_retries: 6
 
 datasets:
-  - path: ./tasks
+  - path: ./LHTB/tasks
     task_names:
       - spot-scheduler-traces

@@ -1,0 +1,233 @@
+<title>LHTB Turn Cache Profile</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#f9f9f7; --surface:#fcfcfb; --fg:#0b0b0b; --fg2:#52514e; --fg3:#8a8984; --line:#e4e3de; --grid:#ecebe6;
+  --read:#2a78d6; --write:#eb6834; --resid:#1baf7a; --comp:#6250d6; --rej:#8a8984; --out:#e87ba4; --rew:#b8860b; --accent:#2a78d6; --chip:#f0efec;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#0d0d0d; --surface:#1a1a19; --fg:#f0efec; --fg2:#c3c2b7; --fg3:#8f8e86; --line:#33332f; --grid:#262623;
+  --read:#3987e5; --write:#d95926; --resid:#199e70; --comp:#9085e9; --rej:#8f8e86; --out:#d55181; --rew:#e0b040; --accent:#3987e5; --chip:#262623; color-scheme:dark }}
+:root[data-theme="dark"]{
+  --bg:#0d0d0d; --surface:#1a1a19; --fg:#f0efec; --fg2:#c3c2b7; --fg3:#8f8e86; --line:#33332f; --grid:#262623;
+  --read:#3987e5; --write:#d95926; --resid:#199e70; --comp:#9085e9; --rej:#8f8e86; --out:#d55181; --rew:#e0b040; --accent:#3987e5; --chip:#262623; color-scheme:dark }
+body{background:var(--bg);color:var(--fg);font-family:"IBM Plex Sans",system-ui,sans-serif;font-size:14px;line-height:1.5;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 48px}
+.wrap{max-width:1180px;margin:0 auto}
+h1{font-size:22px;font-weight:600;margin:0 0 4px;text-wrap:balance}
+h2{font-size:16px;font-weight:600;margin:36px 0 10px}
+p{max-width:72ch;color:var(--fg2);margin:0 0 10px}
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:18px 0 6px}
+.controls .grp{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.lbl{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg3);margin-right:4px}
+button.cond{font:inherit;font-size:13px;padding:5px 11px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--fg);cursor:pointer}
+button.cond[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+input[type=number]{font:inherit;font-family:"IBM Plex Mono",monospace;font-size:13px;width:84px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--fg)}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12px;color:var(--fg2);margin:8px 0 14px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{width:12px;height:12px;border-radius:3px;display:inline-block}
+.sw.ln{width:14px;height:0;border-top:2px dashed var(--comp);border-radius:0}
+.sw.rj{width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:8px solid var(--rej);border-radius:0}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 12px 6px;margin-bottom:14px;min-width:0}
+.ph{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline;margin-bottom:4px}
+.ph b{font-size:15px;font-weight:600}
+.chip{font-size:12px;color:var(--fg2);background:var(--chip);border-radius:6px;padding:1px 7px}
+.chip strong{color:var(--fg);font-weight:500;font-family:"IBM Plex Mono",monospace}
+.chart{position:relative;width:100%}
+.chart svg{display:block;width:100%;height:auto}
+.tip{position:absolute;pointer-events:none;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:12px;line-height:1.4;
+  box-shadow:0 4px 14px rgba(0,0,0,.12);display:none;min-width:150px;z-index:5}
+.tip .k{color:var(--fg2)} .tip .v{font-family:"IBM Plex Mono",monospace;float:right;margin-left:12px}
+.tip div{clear:both}
+svg text{font-family:"IBM Plex Sans",system-ui,sans-serif;fill:var(--fg2);font-size:11px}
+svg .ax{stroke:var(--line)} svg .gr{stroke:var(--grid)}
+svg .ct{fill:var(--comp);font-family:"IBM Plex Mono",monospace;font-size:10px}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+table{border-collapse:collapse;font-size:12.5px;min-width:720px;width:100%}
+th,td{padding:6px 10px;text-align:right;border-bottom:1px solid var(--grid);white-space:nowrap}
+th{font-weight:500;color:var(--fg2);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+td:first-child,th:first-child{text-align:left}
+td.n{font-family:"IBM Plex Mono",monospace}
+tr.sub td{color:var(--fg2);background:var(--chip)}
+.note{font-size:12.5px;color:var(--fg2);max-width:80ch}
+.note li{margin-bottom:4px}
+.warn{border-left:3px solid var(--write);padding:6px 12px;background:var(--chip);border-radius:0 8px 8px 0;margin:10px 0 0;max-width:80ch;font-size:13px}
+</style>
+<div class="wrap">
+<h1>LHTB terminus-2: 턴별 컨텍스트와 캐시 read / write</h1>
+<p>x축은 에이전트 턴(API 호출 1회), y축은 그 호출의 prompt 토큰(= 컨텍스트 크기). 막대는 cache read(아래), cache write(위), 잔여 uncached(맨 위)로 쌓여 있고, 점선은 compaction 직후 첫 턴, 삼각형은 verifier 거절 직후 턴입니다. 각 패널 아래의 작은 패널은 같은 턴의 output(completion) 토큰입니다. 막대 위에 마우스를 올리면 턴별 수치가 보입니다.</p>
+<div class="warn" id="warn"></div>
+<div class="controls">
+  <div class="grp"><span class="lbl">조건</span><span id="conds"></span></div>
+  <div class="grp"><span class="lbl">턴 범위</span><input type="number" id="x0" min="1" step="1"> <span style="color:var(--fg3)">–</span> <input type="number" id="x1" min="1" step="1"> <button class="cond" id="reset">전체</button></div>
+</div>
+<div class="legend"><span><i class="sw" style="background:var(--read)"></i>cache read</span><span><i class="sw" style="background:var(--write)"></i>cache write (prefill)</span><span><i class="sw" style="background:var(--resid)"></i>uncached, 미기록</span><span><i class="sw ln"></i>compaction 직후 턴</span><span><i class="sw rj"></i>거절 직후 턴</span><span><i class="sw" style="background:var(--out)"></i>output(completion) 토큰, 아래 작은 패널</span><span><i class="sw" style="background:var(--rew);border-radius:50%"></i>hidden reward (phase 별 verifier 점수 · 최종값은 큰 점)</span></div>
+<div id="panels"></div>
+
+<h2>점수 (verifier reward)</h2>
+<p><b>reward 궤적.</b> 패치된 harbor 는 제출(완료 선언)마다 돌린 중간 verifier 점수를 <code>interim_verifier.jsonl</code> 에 남기고, 그 점들이 턴 축 위에 계단선으로 그려집니다(마지막 큰 점은 최종 점수). 패치 이전 실행은 최종 reward 한 점과 "첫 verifier 턴"(첫 완료 선언이 거절된 턴), "public 최대 턴"(과제가 제공하는 공개 검사 점수가 처음 최댓값에 도달한 턴, <code>analysis/public_feedback.py</code>)만 표시됩니다.</p>
+<p>막대는 각 트라이얼의 마지막 verifier 실행 결과(<code>verifier/reward.txt</code>). 조건별로 묶었고 과제는 색으로 구분합니다. 통과하면 루프가 끝나므로 실행 시간이 3시간보다 짧은 트라이얼은 통과한 것입니다.</p>
+<div class="panel"><div class="chart" id="score"></div></div>
+<div class="tbl"><table id="scoretbl"></table></div>
+<ul class="note"><li><b>phases</b>: verifier 가 거절한 횟수(= 이어진 continuation 수). <b>첫 완료 선언</b>: 에이전트가 처음 task_complete 를 선언한 시점. <b>명령 턴</b>: 실제로 키 입력을 보낸 턴 수. <b>비용</b>: 본 호출만(요약 호출 제외), configs/prices.json 의 단가 기준(장문 할증 미적용).</li></ul>
+
+<h2>Compaction 직후 prefill(cache write)의 변동성</h2>
+<p>각 점은 compaction 1회. x = compaction 직후 첫 턴의 cache write 토큰(새 prefix 전체를 새로 써 넣는 양). 세로 막대는 평균, 띠는 ±1 표준편차. 과제 색이 아니라 모델별 그룹으로 묶었습니다.</p>
+<div class="panel"><div class="chart" id="strip"></div></div>
+<div class="tbl"><table id="stat"></table></div>
+<ul class="note">
+<li><b>L_before</b>: compaction 직전 턴의 prompt(실효 compaction 한도). <b>L_p</b>: compaction 직후 턴의 prompt. <b>write_c</b>: 직후 턴의 cache write. <b>write_5</b>: 직후 5턴 cache write 합. <b>base</b>: 직전 20턴의 턴당 cache write 중앙값(정상 상태 증분 prefill). <b>summ in/out</b>: 요약을 만든 3회 호출(summary / questions / answers)의 입력·출력 토큰 합. <b>out 직전5턴 / 직후턴 / 직후5턴</b>: compaction 직전 5턴 평균, 직후 첫 턴, 직후 5턴 평균의 output(completion) 토큰.</li>
+<li>cache write 는 Anthropic 응답의 cache_creation_input_tokens(패치된 harbor 가 기록), OpenAI 는 prompt − cached_tokens 입니다. OpenAI 는 1,024 토큰 이상 prefix 만 128 단위로 캐시되므로 직후 턴에도 시스템 프롬프트 부분은 cache read 로 잡힙니다.</li>
+<li>stock terminus-2 의 압축 판단은 litellm 로컬 토크나이저 기준이라 Anthropic 모델에서는 L_before 가 명목 임계값의 약 1.5배가 됩니다. optlimit.harbor_agent 로 돌린 조건은 API 가 보고한 prompt 토큰으로 판단하므로 L_before ≈ 설정값입니다.</li>
+<li>점수: 각 트라이얼의 <code>result.json</code> 의 verifier_result(마지막 verifier 실행 결과). 중간 점수는 패치된 harbor 의 <code>interim_verifier.jsonl</code>.</li>
+</ul>
+</div>
+<script>
+const DATA = __DATA__;
+const STATS = __STATS__;
+const PRICE = __PRICE__;
+const CONDS = __CONDS__;
+const TASKS = __TASKS__;
+const fmt = n => n==null?"–":Math.round(n).toLocaleString("en-US");
+const fk = n => n>=1000? (n/1000).toFixed(n>=10000?0:1)+"K" : String(n);
+let cur = CONDS.length ? CONDS[0][0]+"/"+CONDS[0][1] : "", xr = null;
+const $ = s => document.querySelector(s);
+document.getElementById("warn").innerHTML = __WARN__;
+
+function buildConds(){
+  const el=$("#conds"); el.innerHTML="";
+  for(const [m,c,l] of CONDS){ const b=document.createElement("button"); b.className="cond"; b.textContent=l; b.dataset.k=m+"/"+c;
+    b.setAttribute("aria-pressed", String(cur===m+"/"+c)); b.onclick=()=>{cur=b.dataset.k; xr=null; renderAll();}; el.appendChild(b); }
+}
+function trialsFor(k){ const [m,c]=k.split("/"); return TASKS.map(([t])=>DATA.find(d=>d.model===m&&d.cond===c&&d.task===t)); }
+function niceStep(raw){ const p=Math.pow(10,Math.floor(Math.log10(raw))); const m=raw/p; return (m<=1?1:m<=2?2:m<=5?5:10)*p; }
+function costOf(tr){ const P=PRICE[tr.model]; let c=0; for(const [t,p,cr,cw,co] of tr.rows){ c+=cr*P.read+cw*P.write+Math.max(0,p-cr-cw)*P.unc+co*P.out; } return c/1e6; }
+
+function drawTrial(tr, host, x0, x1){
+  const W = Math.max(360, host.clientWidth||900), H = 250, ml=54, mr=14, mt=26, mb=30, pw=W-ml-mr, ph=H-mt-mb;
+  const rows = tr.rows.filter(r=>r[0]>=x0 && r[0]<=x1);
+  const n = x1-x0+1, xs = pw/n, bw = Math.max(0.7, xs - (xs>5?2:0));
+  const ymax = Math.max(1000, ...rows.map(r=>r[1]))*1.06;
+  const Y = v => mt + ph - v/ymax*ph, X = t => ml + (t-x0)*xs;
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${tr.task} 턴별 prompt 토큰">`;
+  const step = niceStep(ymax/4);
+  for(let v=0; v<=ymax; v+=step){ const y=Y(v); s+=`<line class="gr" x1="${ml}" x2="${W-mr}" y1="${y}" y2="${y}"/><text x="${ml-6}" y="${y+3.5}" text-anchor="end">${fk(v)}</text>`; }
+  for(const r of rows){ const [t,p,cr,cw] = r; const res=Math.max(0,p-cr-cw); const x=X(t)+(xs-bw)/2;
+    let y0=mt+ph;
+    if(cr>0){ const h=cr/ymax*ph; s+=`<rect x="${x.toFixed(2)}" y="${(y0-h).toFixed(2)}" width="${bw.toFixed(2)}" height="${h.toFixed(2)}" fill="var(--read)"/>`; y0-=h; }
+    if(cw>0){ const h=cw/ymax*ph; s+=`<rect x="${x.toFixed(2)}" y="${(y0-h).toFixed(2)}" width="${bw.toFixed(2)}" height="${h.toFixed(2)}" fill="var(--write)"/>`; y0-=h; }
+    if(res>0){ const h=res/ymax*ph; s+=`<rect x="${x.toFixed(2)}" y="${(y0-h).toFixed(2)}" width="${bw.toFixed(2)}" height="${h.toFixed(2)}" fill="var(--resid)"/>`; }
+  }
+  for(const t of tr.rej){ if(t<x0||t>x1) continue; const x=X(t)+xs/2; s+=`<path d="M${x-4},${mt+ph+9} L${x+4},${mt+ph+9} L${x},${mt+ph+2} Z" fill="var(--rej)"><title>거절 직후 턴 ${t}</title></path>`; }
+  let lastLbl=-1e9;
+  for(const t of tr.comp){ if(t<x0||t>x1) continue; const x=X(t); s+=`<line x1="${x}" x2="${x}" y1="${mt-4}" y2="${mt+ph}" stroke="var(--comp)" stroke-width="1.2" stroke-dasharray="4 3"/>`;
+    if(x-lastLbl>28){ s+=`<text class="ct" x="${x+2}" y="${mt-8}">C${t}</text>`; lastLbl=x; } }
+  s+=`<line class="ax" x1="${ml}" x2="${W-mr}" y1="${mt+ph}" y2="${mt+ph}"/>`;
+  const xst = niceStep(n/8);
+  for(let t=Math.ceil(x0/xst)*xst; t<=x1; t+=xst){ if(t<1) continue; s+=`<text x="${X(t)+xs/2}" y="${mt+ph+22}" text-anchor="middle">${t}</text>`; }
+  s+=`<text x="${W-mr}" y="${H-2}" text-anchor="end" style="fill:var(--fg3)">turn</text>`;
+  s+=`<rect id="ov" x="${ml}" y="${mt}" width="${pw}" height="${ph}" fill="transparent"/><line id="ch" x1="0" x2="0" y1="${mt}" y2="${mt+ph}" stroke="var(--fg2)" stroke-width="1" style="display:none"/></svg>`;
+  // output-token panel (own scale)
+  const H2=96, mt2=10, ph2=H2-mt2-22; const omax=Math.max(100, ...rows.map(r=>r[4]))*1.08; const Y2=v=>mt2+ph2-v/omax*ph2;
+  let s2=`<svg viewBox="0 0 ${W} ${H2}" width="${W}" height="${H2}" role="img" aria-label="${tr.task} 턴별 output 토큰">`;
+  const ost=niceStep(omax/2); for(let v=0; v<=omax; v+=ost){ const y=Y2(v); s2+=`<line class="gr" x1="${ml}" x2="${W-mr}" y1="${y}" y2="${y}"/><text x="${ml-6}" y="${y+3.5}" text-anchor="end">${fk(v)}</text>`; }
+  for(const r of rows){ const x=X(r[0])+(xs-bw)/2; const h=r[4]/omax*ph2; if(h>0) s2+=`<rect x="${x.toFixed(2)}" y="${(mt2+ph2-h).toFixed(2)}" width="${bw.toFixed(2)}" height="${h.toFixed(2)}" fill="var(--out)"/>`; }
+  for(const t of tr.comp){ if(t<x0||t>x1) continue; const x=X(t); s2+=`<line x1="${x}" x2="${x}" y1="${mt2}" y2="${mt2+ph2}" stroke="var(--comp)" stroke-width="1.2" stroke-dasharray="4 3"/>`; }
+  s2+=`<line class="ax" x1="${ml}" x2="${W-mr}" y1="${mt2+ph2}" y2="${mt2+ph2}"/><text x="${ml}" y="${H2-4}" style="fill:var(--fg3)">output tokens / turn</text><line id="ch2" x1="0" x2="0" y1="${mt2}" y2="${mt2+ph2}" stroke="var(--fg2)" stroke-width="1" style="display:none"/></svg><div class="tip"></div>`;
+  // reward panel: hidden verifier reward per phase where recorded (patched harbor / host sampler) + final score
+  const H3=74, mt3=8, ph3=H3-mt3-22; const Y3=v=>mt3+ph3-v*ph3;
+  let s3=`<svg viewBox="0 0 ${W} ${H3}" width="${W}" height="${H3}" role="img" aria-label="${tr.task} verifier reward">`;
+  for(const v of [0,0.5,1]){ s3+=`<line class="gr" x1="${ml}" x2="${W-mr}" y1="${Y3(v)}" y2="${Y3(v)}"/><text x="${ml-6}" y="${Y3(v)+3.5}" text-anchor="end">${v}</text>`; }
+  const rc=(tr.rcurve||[]).filter(q=>q[0]>=x0&&q[0]<=x1);
+  if(rc.length>1){ let d=""; rc.forEach((q,i)=>{ const x=X(q[0])+xs/2, y=Y3(q[1]); d+=(i?` H${x} V${y}`:`M${x},${y}`); }); s3+=`<path d="${d}" fill="none" stroke="var(--rew)" stroke-width="2"/>`; }
+  for(const q of rc){ const x=X(q[0])+xs/2; s3+=`<circle cx="${x}" cy="${Y3(q[1])}" r="${q[2]==="final"?4.5:2.6}" fill="var(--rew)" stroke="var(--bg)" stroke-width="1"><title>turn ${q[0]}: reward ${q[1].toFixed(3)}${q[2]==="final"?" (최종)":q[2]!=null?" (phase "+q[2]+")":""}</title></circle>`; }
+  if(tr.first_ver!=null && tr.first_ver>=x0 && tr.first_ver<=x1){ const x=X(tr.first_ver)+xs/2; s3+=`<line x1="${x}" x2="${x}" y1="${mt3}" y2="${mt3+ph3}" stroke="var(--rej)" stroke-width="1" stroke-dasharray="2 2"/><text x="${x+3}" y="${mt3+9}" style="font-size:9.5px;fill:var(--fg2)">첫 verifier t${tr.first_ver}</text>`; }
+  if(tr.pub6!=null && tr.pub6>=x0 && tr.pub6<=x1){ const x=X(tr.pub6)+xs/2; s3+=`<line x1="${x}" x2="${x}" y1="${mt3}" y2="${mt3+ph3}" stroke="var(--resid)" stroke-width="1" stroke-dasharray="2 2"/><text x="${x+3}" y="${mt3+ph3-3}" style="font-size:9.5px;fill:var(--fg2)">public 최대 t${tr.pub6}</text>`; }
+  for(const t of tr.comp){ if(t<x0||t>x1) continue; const x=X(t); s3+=`<line x1="${x}" x2="${x}" y1="${mt3}" y2="${mt3+ph3}" stroke="var(--comp)" stroke-width="1" stroke-dasharray="4 3" opacity="0.6"/>`; }
+  s3+=`<line class="ax" x1="${ml}" x2="${W-mr}" y1="${mt3+ph3}" y2="${mt3+ph3}"/><text x="${ml}" y="${H3-4}" style="fill:var(--fg3)">hidden reward (verifier)${rc.length>1?"":" · 중간 점수 기록 없음, 최종값만"}</text></svg>`;
+  host.innerHTML = s + s2 + s3;
+  const svg=host.querySelector("svg"), tip=host.querySelector(".tip"), ch=host.querySelector("#ch"), ch2=host.querySelector("#ch2"), byTurn=new Map(rows.map(r=>[r[0],r]));
+  host.querySelector("#ov").addEventListener("mousemove", e=>{
+    const pt=svg.createSVGPoint(); pt.x=e.clientX; pt.y=e.clientY; const p=pt.matrixTransform(svg.getScreenCTM().inverse());
+    const t=Math.min(x1, Math.max(x0, Math.floor((p.x-ml)/xs)+x0)); const r=byTurn.get(t); if(!r){tip.style.display="none";return;}
+    const [turn,pr,cr,cw,co,si,so]=r; const res=Math.max(0,pr-cr-cw); const flags=[tr.comp.includes(turn)?"compaction 직후":"", tr.rej.includes(turn)?"거절 직후":""].filter(Boolean).join(", ");
+    tip.innerHTML=`<div><b>turn ${turn}</b> ${flags?`<span class="k">· ${flags}</span>`:""}</div><div><span class="k">prompt</span><span class="v">${fmt(pr)}</span></div><div><span class="k">cache read</span><span class="v">${fmt(cr)}</span></div><div><span class="k">cache write</span><span class="v">${fmt(cw)}</span></div><div><span class="k">uncached</span><span class="v">${fmt(res)}</span></div><div><span class="k">output</span><span class="v">${fmt(co)}</span></div>${si?`<div><span class="k">summary in/out</span><span class="v">${fmt(si)} / ${fmt(so)}</span></div>`:""}`;
+    tip.style.display="block"; const hw=host.clientWidth, tw=tip.offsetWidth; const lx=e.clientX-host.getBoundingClientRect().left;
+    tip.style.left=(lx+14+tw>hw? lx-tw-10 : lx+14)+"px"; tip.style.top=(e.clientY-host.getBoundingClientRect().top-10)+"px";
+    const cx=X(t)+xs/2; ch.setAttribute("x1",cx); ch.setAttribute("x2",cx); ch.style.display="block"; ch2.setAttribute("x1",cx); ch2.setAttribute("x2",cx); ch2.style.display="block";
+  });
+  host.querySelector("#ov").addEventListener("mouseleave", ()=>{tip.style.display="none"; ch.style.display="none"; ch2.style.display="none";});
+}
+
+function renderAll(){
+  buildConds();
+  const trs=trialsFor(cur); const host=$("#panels"); host.innerHTML="";
+  const nmax=Math.max(...trs.filter(Boolean).map(t=>t.n));
+  if(!xr) xr=[1,nmax];
+  $("#x0").value=xr[0]; $("#x1").value=xr[1]; $("#x0").max=nmax; $("#x1").max=nmax;
+  for(const [key,name] of TASKS){ const tr=trs.find(t=>t&&t.task===key); const d=document.createElement("div"); d.className="panel";
+    if(!tr){ d.innerHTML=`<div class="ph"><b>${name}</b><span class="chip">데이터 없음</span></div>`; host.appendChild(d); continue; }
+    const x1=Math.min(xr[1],tr.n), x0=Math.min(xr[0],x1);
+    d.innerHTML=`<div class="ph"><b>${name}</b><span class="chip">turns <strong>${tr.n}</strong></span><span class="chip">max prompt <strong>${fmt(tr.max_prompt)}</strong></span><span class="chip">compaction <strong>${tr.comp.length}</strong>회</span><span class="chip">거절 <strong>${tr.rej.length}</strong>회</span><span class="chip">output 합계 <strong>${fmt(tr.out_sum)}</strong> (턴당 ${fmt(tr.out_sum/tr.n)})</span><span class="chip">보상 <strong>${tr.reward==null?"–":tr.reward.toFixed(3)}</strong></span><span class="chip">첫 verifier <strong>${tr.first_ver==null?"–":"t"+tr.first_ver}</strong></span><span class="chip">public 최대 <strong>${tr.pub6==null?"–":"t"+tr.pub6}</strong></span><span class="chip">실행 <strong>${tr.dur_min==null?"–":Math.round(tr.dur_min)+"분"}</strong></span><span class="chip">본 호출 비용 <strong>$${costOf(tr).toFixed(3)}</strong></span></div><div class="chart"></div>`;
+    host.appendChild(d); drawTrial(tr, d.querySelector(".chart"), x0, x1);
+  }
+}
+$("#x0").onchange=$("#x1").onchange=()=>{ xr=[+$("#x0").value||1, +$("#x1").value||1]; if(xr[0]>xr[1]) xr=[xr[1],xr[0]]; renderAll(); };
+$("#reset").onclick=()=>{xr=null; renderAll();};
+
+function drawStrip(){
+  const host=$("#strip"); const groups=Object.keys(STATS.by_cond_task).sort();
+  const W=Math.max(360,host.clientWidth||900), rowH=22, ml=170, mr=16, mt=22, mb=28, H=mt+mb+rowH*groups.length, pw=W-ml-mr;
+  const xmax=Math.ceil(Math.max(...STATS.events.map(e=>e.write_c))/2000)*2000; const X=v=>ml+v/xmax*pw;
+  let s=`<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="compaction 직후 cache write 분포">`;
+  const st=niceStep(xmax/6); for(let v=0; v<=xmax; v+=st){ s+=`<line class="gr" x1="${X(v)}" x2="${X(v)}" y1="${mt-6}" y2="${H-mb}"/><text x="${X(v)}" y="${H-mb+16}" text-anchor="middle">${fk(v)}</text>`; }
+  s+=`<text x="${W-mr}" y="${H-2}" text-anchor="end" style="fill:var(--fg3)">cache write tokens (compaction 직후 턴)</text>`;
+  groups.forEach((g,i)=>{ const y=mt+i*rowH+rowH/2; const st=STATS.by_cond_task[g]; const wc=st.write_c; const col=g.includes("haiku")?"var(--write)":"var(--read)";
+    s+=`<text x="${ml-8}" y="${y+4}" text-anchor="end" style="font-family:'IBM Plex Mono',monospace;font-size:11px">${g}</text>`;
+    s+=`<rect x="${X(Math.max(0,wc.mean-wc.std))}" y="${y-7}" width="${X(wc.mean+wc.std)-X(Math.max(0,wc.mean-wc.std))}" height="14" fill="${col}" opacity=".15" rx="3"/>`;
+    for(const e of STATS.events.filter(e=>`${e.model}/${e.cond}/${e.task}`===g)){ s+=`<circle cx="${X(e.write_c)}" cy="${y}" r="4" fill="${col}" stroke="var(--surface)" stroke-width="1.5"><title>${g} turn ${e.turn}: write ${fmt(e.write_c)}, L_before ${fmt(e.L_before)}, L_p ${fmt(e.L_p)}, output ${fmt(e.completion_c)}</title></circle>`; }
+    s+=`<line x1="${X(wc.mean)}" x2="${X(wc.mean)}" y1="${y-9}" y2="${y+9}" stroke="var(--fg)" stroke-width="2"/>`;
+    s+=`<text x="${W-mr}" y="${y+4}" text-anchor="end" style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;fill:var(--fg3)">n=${st.n} CV ${(wc.cv*100).toFixed(0)}%</text>`;
+  });
+  host.innerHTML=s+"</svg>";
+}
+const TCOL={gdal:"var(--read)",seismo:"var(--write)",sqlite:"var(--resid)"};
+function drawScore(){
+  const host=$("#score"); const conds=CONDS.filter(([m,c])=>DATA.some(d=>d.model===m&&d.cond===c&&d.reward!=null));
+  const W=Math.max(360,host.clientWidth||900), H=230, ml=44, mr=14, mt=18, mb=44, pw=W-ml-mr, ph=H-mt-mb;
+  const gw=pw/conds.length, bw=Math.min(28,(gw-16)/3); const Y=v=>mt+ph-v*ph;
+  let s=`<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="조건별 과제별 verifier reward">`;
+  for(const v of [0,0.25,0.5,0.75,1]){ s+=`<line class="gr" x1="${ml}" x2="${W-mr}" y1="${Y(v)}" y2="${Y(v)}"/><text x="${ml-6}" y="${Y(v)+3.5}" text-anchor="end">${v}</text>`; }
+  conds.forEach(([m,c,l],i)=>{ const gx=ml+i*gw+(gw-3*bw-4)/2;
+    TASKS.forEach(([t],j)=>{ const d=DATA.find(d=>d.model===m&&d.cond===c&&d.task===t); if(!d||d.reward==null) return; const x=gx+j*(bw+2); const h=d.reward*ph;
+      s+=`<rect x="${x}" y="${Y(d.reward)}" width="${bw}" height="${h}" rx="3" fill="${TCOL[t]}"><title>${l} / ${t}: ${d.reward.toFixed(3)}, ${d.end}, ${Math.round(d.dur_min)}분</title></rect>`;
+      s+=`<text x="${x+bw/2}" y="${Y(d.reward)-4}" text-anchor="middle" style="font-size:10px;font-family:'IBM Plex Mono',monospace">${d.reward.toFixed(2)}</text>`; });
+    const vals=TASKS.map(([t])=>DATA.find(d=>d.model===m&&d.cond===c&&d.task===t)).filter(d=>d&&d.reward!=null).map(d=>d.reward);
+    const mean=vals.reduce((a,b)=>a+b,0)/vals.length;
+    s+=`<line x1="${gx-4}" x2="${gx+3*bw+8}" y1="${Y(mean)}" y2="${Y(mean)}" stroke="var(--fg)" stroke-width="1.5" stroke-dasharray="3 2"/>`;
+    s+=`<text x="${ml+i*gw+gw/2}" y="${H-24}" text-anchor="middle" style="fill:var(--fg)">${l}</text><text x="${ml+i*gw+gw/2}" y="${H-10}" text-anchor="middle" style="font-family:'IBM Plex Mono',monospace;font-size:10.5px">mean ${mean.toFixed(3)}</text>`; });
+  s+=`<line class="ax" x1="${ml}" x2="${W-mr}" y1="${mt+ph}" y2="${mt+ph}"/>`;
+  s+=`</svg><div class="legend" style="margin:8px 0 0">${TASKS.map(([t,n])=>`<span><i class="sw" style="background:${TCOL[t]}"></i>${n}</span>`).join("")}<span><i class="sw ln" style="border-top-color:var(--fg)"></i>조건 평균</span></div>`;
+  host.innerHTML=s;
+}
+function buildScoreTable(){
+  const t=$("#scoretbl"); const hdr=["조건","과제","reward","종료","실행(분)","phases","첫 완료 선언(분)","첫 verifier 턴","public 최대 턴","reward 기록점","turns","명령 턴","compaction","max prompt","output 합계","본 호출 비용"];
+  let h="<thead><tr>"+hdr.map(x=>`<th>${x}</th>`).join("")+"</tr></thead><tbody>";
+  for(const [m,c,l] of CONDS){ const ds=TASKS.map(([k])=>DATA.find(d=>d.model===m&&d.cond===c&&d.task===k)).filter(Boolean); if(!ds.length) continue;
+    for(const d of ds){ h+=`<tr><td>${l}</td><td>${d.task}</td><td class="n">${d.reward==null?"–":d.reward.toFixed(3)}</td><td>${d.end}</td><td class="n">${d.dur_min==null?"–":Math.round(d.dur_min)}</td><td class="n">${d.phases==null?"–":d.phases}</td><td class="n">${d.first_done_min==null?"–":d.first_done_min.toFixed(1)}</td><td class="n">${d.first_ver==null?"–":d.first_ver}</td><td class="n">${d.pub6==null?"–":d.pub6}</td><td class="n">${(d.rcurve||[]).length}</td><td class="n">${d.n}</td><td class="n">${d.cmd_turns}</td><td class="n">${d.comp.length}</td><td class="n">${fmt(d.max_prompt)}</td><td class="n">${fmt(d.out_sum)}</td><td class="n">$${costOf(d).toFixed(3)}</td></tr>`; }
+    const rs=ds.filter(d=>d.reward!=null).map(d=>d.reward); if(rs.length) h+=`<tr class="sub"><td>${l} 평균</td><td></td><td class="n">${(rs.reduce((a,b)=>a+b,0)/rs.length).toFixed(3)}</td><td colspan="13"></td></tr>`; }
+  t.innerHTML=h+"</tbody>";
+}
+function buildTable(){
+  const t=$("#stat"); const hdr=["그룹","n","L_before","L_p","write_c 평균","std","CV","min","max","write_5 평균","base","summ in","summ out","out 직전5턴","out 직후턴","out 직후5턴"];
+  let h="<thead><tr>"+hdr.map(x=>`<th>${x}</th>`).join("")+"</tr></thead><tbody>";
+  const row=(k,st,sub)=>{ const w=st.write_c; return `<tr${sub?' class="sub"':''}><td>${k}</td><td class="n">${st.n}</td><td class="n">${fmt(st.L_before.mean)}</td><td class="n">${fmt(st.L_p.mean)}</td><td class="n">${fmt(w.mean)}</td><td class="n">${fmt(w.std)}</td><td class="n">${(w.cv*100).toFixed(0)}%</td><td class="n">${fmt(w.min)}</td><td class="n">${fmt(w.max)}</td><td class="n">${fmt(st.write_5.mean)}</td><td class="n">${st.base_write?fmt(st.base_write.mean):"–"}</td><td class="n">${fmt(st.summ_in.mean)}</td><td class="n">${fmt(st.summ_out.mean)}</td><td class="n">${st.out_before5?fmt(st.out_before5.mean):"–"}</td><td class="n">${fmt(st.out_c.mean)}</td><td class="n">${st.out_after5?fmt(st.out_after5.mean):"–"}</td></tr>`; };
+  for(const k of Object.keys(STATS.by_cond_task).sort()) h+=row(k,STATS.by_cond_task[k],false);
+  for(const k of Object.keys(STATS.by_cond).sort()) h+=row(k+" (과제 합산)",STATS.by_cond[k],true);
+  for(const k of Object.keys(STATS.by_task).sort()) h+=row(k+" (조건 합산)",STATS.by_task[k],true);
+  t.innerHTML=h+"</tbody>";
+}
+renderAll(); drawScore(); buildScoreTable(); drawStrip(); buildTable();
+let rt; addEventListener("resize",()=>{clearTimeout(rt); rt=setTimeout(()=>{renderAll(); drawScore(); drawStrip();},150);});
+</script>

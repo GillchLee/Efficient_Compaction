@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Reward / token table across sweep jobs (one job per compaction window).
 
-    python scripts/sweep_summary.py jobs/lhtb-luna-ctx* [--out jobs/sweep_luna_ctx.csv]
+    python analysis/sweep_summary.py jobs/<job>... [--out jobs/sweep_summary.csv]
 
-Reads <job>/token_turns/summary.csv (written by scripts/token_turns.py) and prints
+Reads <job>/token_turns/summary.csv (written by analysis/token_turns.py) and prints
 reward per task for every job, plus mean reward, solves (R >= 0.95) and tokens.
 """
 
@@ -47,10 +47,11 @@ def main() -> int:
     jobs = sorted({r["job"] for r in rows}, key=[d.name for d in args.job_dirs].index)
     tasks = sorted({r["task"] for r in rows})
     reward = {(r["job"], r["task"]): _float(r["reward"]) for r in rows}
+    label = {r["job"]: (r.get("condition") or r["job"])[-10:] for r in rows}
 
     fmt = lambda v: "-" if v is None else f"{v:.3f}"  # noqa: E731
     width = max(len(t) for t in tasks)
-    print(f"{'task':<{width}}  " + "  ".join(f"{j.rsplit('ctx', 1)[-1][-10:]:>10}" for j in jobs))
+    print(f"{'task':<{width}}  " + "  ".join(f"{label[j]:>10}" for j in jobs))
     for t in tasks:
         print(f"{t:<{width}}  " + "  ".join(f"{fmt(reward.get((j, t))):>10}" for j in jobs))
 
@@ -62,6 +63,8 @@ def main() -> int:
         out_rows.append(
             {
                 "job": j,
+                "model": job_rows[0].get("model", ""),
+                "condition": job_rows[0].get("condition", ""),
                 "tasks": len(tasks),
                 "scored": len(scored),
                 # Unscored tasks count as 0, as in the LHTB leaderboard.
@@ -85,7 +88,7 @@ def main() -> int:
     print()
     for r in out_rows:
         print(
-            f"{r['job']:<24} mean={r['mean_reward']:.3f} solved={r['solved']}/{r['tasks']} "
+            f"{r['job']:<24} {r['condition']:<10} mean={r['mean_reward']:.3f} solved={r['solved']}/{r['tasks']} "
             f"compactions={r['compactions']} turns={r['turns']} "
             f"prompt={r['sum_prompt_tokens']:,} cache_read={r['sum_cache_read']:,} "
             f"cache_write={r['sum_cache_write']:,} output={r['sum_completion_tokens']:,} "

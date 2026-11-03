@@ -37,7 +37,7 @@ agents:
         max_tokens: 8192
 
 datasets:
-  - path: ./tasks
+  - path: ./LHTB/tasks
     task_names:
       - langchain-version-migration
       - commit0-multilib-tdd

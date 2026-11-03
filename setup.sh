@@ -1,70 +1,76 @@
 #!/usr/bin/env bash
 # Rebuild the experiment workspace from scratch:
-#   LHTB at the pinned commit + Harbor patch + this repo's configs and scripts + venv.
+#   ./LHTB at the pinned commit + Harbor patch + ./.venv with the patched Harbor and optlimit.
 #
-#   bash setup.sh [target_dir]        # default: ./LHTB next to this file
+#   bash setup.sh                 # LHTB -> ./LHTB, venv -> ./.venv
 #
-# Env overrides: LHTB_URL (clone source), SKIP_LFS=1 (skip `git lfs pull`).
+# Env overrides: LHTB_URL (clone source), LHTB_DIR (default ./LHTB), PY (python for the
+# venv, default 3.12), SKIP_LFS=1 (skip `git lfs pull`; automatic when git-lfs is missing).
+# Nothing is copied into LHTB: jobs run from this directory and configs point at
+# ./LHTB/tasks (LHTB 1.0) or ./LHTB/tasks-2.0 (LHTB 2.0).
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-TARGET=${1:-$HERE/LHTB}
+LHTB_DIR=${LHTB_DIR:-$HERE/LHTB}
 LHTB_URL=${LHTB_URL:-https://github.com/zli12321/LHTB}
 LHTB_COMMIT=7ca0cacea9bf6a0694eaad7306bed794eaaaabce
 PATCH=$HERE/patches/harbor-token-and-summary-tracking.patch
+PY=${PY:-3.12}
 
 for cmd in git uv; do
   command -v "$cmd" >/dev/null || { echo "missing: $cmd" >&2; exit 1; }
 done
-if [[ "${SKIP_LFS:-0}" != 1 ]] && ! command -v git-lfs >/dev/null; then
-  echo "missing: git-lfs (brew install git-lfs), or set SKIP_LFS=1" >&2
-  exit 1
+if [[ "${SKIP_LFS:-0}" != 1 ]] && ! git lfs version >/dev/null 2>&1; then
+  echo "git-lfs not installed: skipping LFS pull (only some task assets need it)" >&2
+  SKIP_LFS=1
 fi
 
-# 1. LHTB at the commit the experiments ran on
-if [[ ! -d "$TARGET/.git" ]]; then
-  git clone "$LHTB_URL" "$TARGET"
+# 1. LHTB at the commit the experiments ran on (shallow: the commit is the current main)
+if [[ ! -d "$LHTB_DIR/.git" ]]; then
+  git clone --depth 1 "$LHTB_URL" "$LHTB_DIR" || true
 fi
-cd "$TARGET"
-git checkout --quiet "$LHTB_COMMIT"
+if [[ "${SKIP_LFS:-0}" == 1 ]]; then
+  # a global `git lfs install` makes checkout fail without the binary: keep LFS pointers as files
+  git -C "$LHTB_DIR" config filter.lfs.required false
+  git -C "$LHTB_DIR" config filter.lfs.process ""
+  git -C "$LHTB_DIR" config filter.lfs.smudge cat
+  git -C "$LHTB_DIR" config filter.lfs.clean cat
+fi
+if ! git -C "$LHTB_DIR" rev-parse --verify --quiet "$LHTB_COMMIT^{commit}" >/dev/null; then
+  git -C "$LHTB_DIR" fetch --depth 1 origin "$LHTB_COMMIT"
+fi
+git -C "$LHTB_DIR" checkout --quiet --force "$LHTB_COMMIT"
 if [[ "${SKIP_LFS:-0}" != 1 ]]; then
-  git lfs install --local
-  git lfs pull
+  git -C "$LHTB_DIR" lfs install --local
+  git -C "$LHTB_DIR" lfs pull
 fi
 
-# 2. Harbor patch: per-turn cache write, short-summary tracking
-if git apply --check "$PATCH" 2>/dev/null; then
-  git apply "$PATCH"
+# 2. Harbor patch: per-call cache write + last usage, short-summary tracking, interim verifier log
+if git -C "$LHTB_DIR" apply --check "$PATCH" 2>/dev/null; then
+  git -C "$LHTB_DIR" apply "$PATCH"
   echo "applied $(basename "$PATCH")"
-elif git apply --reverse --check "$PATCH" 2>/dev/null; then
+elif git -C "$LHTB_DIR" apply --reverse --check "$PATCH" 2>/dev/null; then
   echo "patch already applied"
 else
-  echo "patch does not apply cleanly to $TARGET" >&2
+  echo "patch does not apply cleanly to $LHTB_DIR" >&2
   exit 1
 fi
 
-# 3. Configs and scripts
-mkdir -p configs/sweep configs/smoke configs/examples
-cp "$HERE"/configs/sweep/*.yaml configs/sweep/
-cp "$HERE"/configs/smoke/*.yaml configs/smoke/
-cp "$HERE"/configs/examples/*.yaml configs/examples/
-for f in "$HERE"/scripts/*; do
-  cp "$f" scripts/
-  chmod +x "scripts/$(basename "$f")"
-done
-
-# 4. Python 3.12 venv with the patched Harbor (+ Daytona SDK)
+# 3. venv: patched Harbor (+ Daytona SDK), optlimit (this repo), pytest
+cd "$HERE"
 if [[ ! -d .venv ]]; then
-  uv venv -p 3.12 .venv
+  uv venv -p "$PY" .venv
 fi
-uv pip install --python .venv/bin/python -e 'harbor[daytona]'
+uv pip install --python .venv/bin/python -e "$LHTB_DIR/harbor[daytona]" -e . pytest pytest-asyncio
 
-# 5. Secrets file (never committed)
+# 4. Secrets file (never committed)
 if [[ ! -f .env ]]; then
-  cp "$HERE/.env.example" .env
+  cp .env.example .env
   chmod 600 .env
-  echo "created $TARGET/.env: fill in the keys"
+  echo "created .env: fill in the keys"
 fi
 
-echo "done: $TARGET"
-echo "next: edit .env, then e.g. bash scripts/run_job.sh configs/smoke/luna_ctx6k_smoke.yaml"
+mkdir -p jobs/logs
+echo "done. next: edit .env, then e.g."
+echo "  python configs/make_config.py --model anthropic/claude-sonnet-5-5 --limit 80000 --tasks seismo_cross_correlation_lag__01 --hours 0.25"
+echo "  bash scripts/run_job.sh configs/sweep/<job>.yaml"

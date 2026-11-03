@@ -4,7 +4,7 @@
 # Run via the wrapper (sets HB_CONTINUE_MODE=same_conversation and checks prereqs):
 #
 #   export ANTHROPIC_API_KEY=sk-ant-...         # YOUR key — never commit it
-#   bash scripts/run_claude_long3.sh
+#   bash scripts/run_job.sh configs/examples/claude_long3.yaml
 #
 # Per-turn token table afterwards:
 #
@@ -49,7 +49,7 @@ agents:
         num_retries: 4
 
 datasets:
-  - path: ./tasks
+  - path: ./LHTB/tasks
     task_names:
       # games
       - "2048"
