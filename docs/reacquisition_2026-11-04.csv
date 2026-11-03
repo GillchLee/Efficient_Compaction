@@ -22,3 +22,15 @@ luna10_l60k,apex-law433-matter__XnCg2wD,apex-law433-matter,l60k,22,984,5928,0.65
 luna10_l60k,chess-mate__SUYk2ZC,chess-mate,l60k,12,1427,3777,0.938,0.822,1.23,1.23,0.0,1:1.00 2:1.00 3:1.00 4:1.00 5:0.82 6:1.00 7:0.78 8:0.90 9:0.90 10:1.00
 luna10_l60k,spot-scheduler-traces__eGr4MEF,spot-scheduler-traces,l60k,13,694,4469,0.35,0.341,0.79,0.79,0.03,1:0.42 2:0.60 3:0.12 4:0.25 5:0.36 6:0.67 7:0.10 8:0.22 9:0.45 10:0.27
 smoke_sonnet_l20k,seismo_cross_correlation_lag__01__5ouUG2d,seismo_cross_correlation_lag,l20k,2,47,4560,0.1,0,0.5,0.5,0.0,1:0.00 2:0.00 3:0.00 4:0.00 5:0.00 7:0.50 9:0.00
+luna10c_l15k,apex-ib244-matter__DtFfjoE,apex-ib244-matter,l15k,100,477,6622,0.907,0.286,5.01,5.01,0.06,1:0.99 2:0.87 3:0.92 4:0.92 5:0.81 6:0.79 7:1.00 8:1.00
+luna10c_l15k,apex-law433-matter__LZwTsZj,apex-law433-matter,l15k,77,704,4825,0.674,0.379,2.77,2.77,0.08,1:0.95 2:0.80 3:0.78 4:0.68 5:0.61 6:0.60 7:0.55 8:0.52 9:0.53 10:0.54
+luna10c_l15k,spot-scheduler-traces__LTW2rSF,spot-scheduler-traces,l15k,56,700,4218,0.421,0.338,0.82,0.82,0.44,1:0.45 2:0.51 3:0.49 4:0.38 5:0.38 6:0.44 7:0.33 8:0.35 9:0.39 10:0.47
+luna10c_l25k,apex-ib244-matter__dfYGocr,apex-ib244-matter,l25k,52,624,6036,0.677,0.538,1.36,1.36,0.09,1:0.96 2:0.74 3:0.66 4:0.63 5:0.60 6:0.62 7:0.63 8:0.61 9:0.67 10:0.62
+luna10c_l25k,apex-law433-matter__jdZm3tP,apex-law433-matter,l25k,40,681,5155,0.705,0.555,1.48,1.48,0.11,1:1.00 2:0.77 3:0.75 4:0.72 5:0.68 6:0.69 7:0.59 8:0.64 9:0.63 10:0.55
+luna10c_l25k,spot-scheduler-traces__KjaSAyT,spot-scheduler-traces,l25k,29,650,4648,0.384,0.319,0.87,0.87,0.22,1:0.17 2:0.54 3:0.46 4:0.47 5:0.30 6:0.29 7:0.38 8:0.46 9:0.38 10:0.40
+luna10c_f_stock,apex-ib244-matter__7oEyWfB,apex-ib244-matter,formula:terminus2-gpt-6-luna,35,684,6087,0.643,0.553,0.96,0.96,0.09,1:0.91 2:0.75 3:0.61 4:0.64 5:0.68 6:0.59 7:0.60 8:0.58 9:0.49 10:0.59
+luna10c_f_stock,apex-law433-matter__d9cmvfD,apex-law433-matter,formula:terminus2-gpt-6-luna,37,708,5017,0.66,0.604,0.7,0.7,0.09,1:1.00 2:0.62 3:0.68 4:0.59 5:0.68 6:0.67 7:0.57 8:0.54 9:0.69 10:0.57
+luna10c_f_stock,spot-scheduler-traces__cQNNRbi,spot-scheduler-traces,formula:terminus2-gpt-6-luna,21,499,4277,0.376,0.385,0.35,0.35,0.62,1:0.26 2:0.39 3:0.38 4:0.17 5:0.40 6:0.25 7:0.38 8:0.57 9:0.50 10:0.42
+luna10c_f_single,apex-ib244-matter__rMRiBbc,apex-ib244-matter,formula:terminus2-gpt-6-luna-single,61,788,4329,0.606,0.55,0.72,0.72,0.18,1:0.81 2:0.68 3:0.70 4:0.56 5:0.65 6:0.50 7:0.62 8:0.50 9:0.49 10:0.49
+luna10c_f_single,apex-law433-matter__3ZpgdCD,apex-law433-matter,formula:terminus2-gpt-6-luna-single,60,780,4153,0.728,0.565,1.62,1.62,0.11,1:0.92 2:0.78 3:0.73 4:0.68 5:0.76 6:0.68 7:0.81 8:0.64 9:0.61 10:0.66
+luna10c_f_single,spot-scheduler-traces__nz7mPay,spot-scheduler-traces,formula:terminus2-gpt-6-luna-single,38,680,3415,0.242,0.233,0.62,0.62,0.46,1:0.09 2:0.41 3:0.24 4:0.38 5:0.20 6:0.07 7:0.24 8:0.31 9:0.43 10:0.12
