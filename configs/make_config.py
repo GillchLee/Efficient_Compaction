@@ -53,6 +53,7 @@ def main() -> int:
     ap.add_argument("--hours", type=float, default=3.0, help="agent budget per task")
     ap.add_argument("--concurrent", type=int, default=1)
     ap.add_argument("--max-tokens", type=int, default=16384)
+    ap.add_argument("--retries", type=int, default=6, help="litellm num_retries per call")
     ap.add_argument("--temperature", type=float)
     ap.add_argument("--job-name")
     ap.add_argument("--jobs-dir", default="./jobs")
@@ -77,7 +78,7 @@ def main() -> int:
         "enable_summarize": True,
         "proactive_summarization_threshold": a.native_threshold if a.native_threshold is not None else 8000,
         "record_terminal_session": True,
-        "llm_call_kwargs": {"max_tokens": a.max_tokens},
+        "llm_call_kwargs": {"max_tokens": a.max_tokens, "num_retries": a.retries},
     }
     if a.temperature is not None:
         kwargs["temperature"] = a.temperature
