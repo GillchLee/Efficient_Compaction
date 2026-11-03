@@ -69,3 +69,19 @@
 | 턴 · 비용 | 47턴, $0.80 (요약 6회 $0.21 포함) |
 
 `agent/optlimit_decisions.jsonl` 에 턴마다 prompt · cached · L · 결정 · window 가 남고 `token_turns.py` 가 `ol_limit/ol_g_hat/ol_compact` 열로 붙입니다. Anthropic 모델에서 1.53배 보정 없이 설정값에서 압축됨을 확인했습니다.
+
+## Luna 동적(formula, g 관측만) 결과 — `jobs/luna_formula_nog` (2026-11-03 21:12 ~ 11-04 00:12)
+
+GPT-6 Luna, LHTB 2.0 3과제, 3시간, docker. Lp/L0/m/γ 는 `terminus2-gpt-6-luna` 사전값, g 는 사전값 없이(`g_prior_weight 0`) 관측만. 첫 턴은 L\* 없음(`no_g`), 둘째 턴부터 L\* 30–39K 로 시작해 g 평균이 안정되면서 gdal 은 26K 근처로 수렴(g_hat 중앙값 1,021; 1.0/2.0 과제 9 trial 사전 적합값 717 보다 큼).
+
+| task | 조건 | reward | end | turns | 압축 | $ | $/턴 |
+|---|---|---|---|---|---|---|---|
+| gdal | formula (L\* 평균 26.2K) | 0.6515 | timeout | 1078 | 48 | 0.750 | 0.00070 |
+| gdal | l40k (이전) | 0.6212 | timeout | 1021 | 16 | 0.806 | 0.00079 |
+| gdal | l120k (이전) | 0.6061 | timeout | 429 | 4 | 0.711 | 0.00166 |
+| gdal | native (이전) | 0.6364 | timeout | 919 | 0 | 5.522 | 0.00601 |
+| sqlite | formula | 1.0 | passed 6분 | 32 | 1 | 0.028 | 0.00087 |
+| sqlite | l40k / l120k / native (이전) | 0.60 / 1.0 / 1.0 | timeout / passed / passed | 879 / 297 / 148 | 22 / 3 / 0 | 0.769 / 0.584 / 0.332 | 0.00087 / 0.00197 / 0.00224 |
+| seismo | formula | 1.0 | passed 2분 | 9 | 0 | 0.007 | 0.00079 |
+
+같은 궤적 리플레이(`analysis/replay.py jobs/luna_formula_nog --set g_prior_weight=0`): gdal formula 0.00065 $/턴(실측 0.00066) vs fixed 40K 0.00069, fixed 120K 0.00104 — 동적이 고정 40K 보다 턴당 약 6% 싸고, 실측도 이전 l40k 실행(0.00079) 보다 낮음. 압축 48회에도 reward 는 0.65 로 다른 조건과 같은 수준(gdal 은 어느 조건에서도 timeout).
