@@ -53,6 +53,28 @@
    "summary_out": 8600,
    "phi": 0.0,
    "_detail": "Lp = task 1.1-1.7K + screen ~0.6K + template 0.15K + summary ~3.9K + questions ~0.75K + answers ~3K; summary_out = those 7.65K visible tokens + ~1K reasoning. Replace with fit_priors.py output once a run exists."
+  },
+  "terminus2-gpt-6-luna-single": {
+   "source": "projection for handoff mode=single summary_words=800 (not yet measured); g/L0/gamma from terminus2-gpt-6-luna",
+   "Lp": 3400,
+   "L0": 1258,
+   "g": 717,
+   "m": 1.0,
+   "gamma": 1.508,
+   "summary_out": 1600,
+   "phi": 0.0,
+   "_detail": "Lp = task 1.1-1.7K + screen ~0.6K + template 0.2K + summary ~1.2K; summary_out = 1.2K visible + reasoning"
+  },
+  "terminus2-gpt-6-luna-single2k": {
+   "source": "projection for handoff mode=single summary_words=2000 (not yet measured)",
+   "Lp": 5200,
+   "L0": 1258,
+   "g": 717,
+   "m": 1.0,
+   "gamma": 1.508,
+   "summary_out": 3500,
+   "phi": 0.0,
+   "_detail": "as -single with a ~3K-token summary"
   }
  }
 }

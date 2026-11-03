@@ -45,6 +45,12 @@ summarization calls (stock prompts when absent):
             summary_words: 2600   # "approximately N words" in the summary prompt
             min_questions: 12     # "at least N questions" (stock: five)
             answer_words: 2000    # "approximately N words in total" in the answer prompt
+
+`handoff.mode: single` replaces terminus-2's three calls (summary, questions, answers: m ~ 2.2
+full-context reads and ~4K output tokens per compaction) by ONE structured summary call
+(m = 1) whose output is the whole hand-off: the next window starts from
+[system, "task + structured summary + terminal screen + continue"].  `summary_words`
+sets its length.  Everything else (trajectory files, metrics, decision log) is unchanged.
 """
 from __future__ import annotations
 
@@ -57,7 +63,7 @@ from harbor.agents.terminus_2.terminus_2 import Terminus2
 from .controller import LimitController, config_from_spec, load_prices
 
 class OptlimitTerminus2(Terminus2):
-    HANDOFF_KEYS = ("summary_words", "min_questions", "answer_words")
+    HANDOFF_KEYS = ("mode", "summary_words", "min_questions", "answer_words")
 
     def __init__(self, logs_dir: Path, model_name: str | None = None, optlimit: dict | None = None,
                  handoff: dict | None = None, **kwargs):
@@ -70,6 +76,8 @@ class OptlimitTerminus2(Terminus2):
         unknown = set(self._handoff) - set(self.HANDOFF_KEYS)
         if unknown:
             raise ValueError(f"handoff: unknown keys {sorted(unknown)} (allowed: {self.HANDOFF_KEYS})")
+        if self._handoff.get("mode", "stock") not in ("stock", "single"):
+            raise ValueError("handoff.mode must be 'stock' or 'single'")
         self._ctl = LimitController(self._ol_cfg)
         self._ol_key = "main"
         self._ol_seen = None          # last UsageInfo object the controller has consumed
@@ -101,6 +109,64 @@ class OptlimitTerminus2(Terminus2):
             "\nMake each question specific (exact files, commands, values, failing checks) so that"
             " the answers can be acted on directly."
         )
+
+    # ---- single-call structured hand-off (handoff.mode: single)
+    def _single_summary_prompt(self, original_instruction: str) -> str:
+        n = self._handoff.get("summary_words") or 800
+        return f"""You are about to hand off your work to another AI agent that will NOT see this
+conversation. Write the hand-off note it needs to continue without redoing anything.
+
+Original Task: {original_instruction}
+
+Write approximately {int(n)} words, as these sections:
+1. **Status** - what is done, what is not, and the exact last thing you were doing.
+2. **Files and state** - every file you created or changed (exact paths) and what is in them now;
+   environment facts (installed tools, versions, data locations, credentials or ports) verbatim.
+3. **Commands that matter** - the exact commands to run tests / feedback / build, and their last
+   key results (numbers, pass/fail, error messages verbatim). Do not list commands twice.
+4. **Open problems** - what failed, what you ruled out, and the hypotheses still open.
+5. **Next steps** - the concrete next actions, in order.
+
+Quote exact paths, commands, values and error text; do not summarize where the exact text matters."""
+
+    def _single_handoff_prompt(self, original_instruction: str, summary: str, current_screen: str) -> str:
+        return f"""You are picking up work from a previous AI agent on this task:
+
+**Original Task:** {original_instruction}
+
+**Hand-off note from the previous agent:**
+{summary}
+
+**Current Terminal Screen:**
+{current_screen}
+
+Continue working on this task from where the previous agent left off. Do not redo work the
+note says is done; verify only what the next step needs. Please follow the spec to interact
+with the terminal."""
+
+    async def _summarize(self, chat, original_instruction, session):
+        if self._handoff.get("mode", "stock") != "single":
+            return await super()._summarize(chat, original_instruction, session)
+        if len(chat.messages) == 0:
+            return original_instruction, None
+        self._summarization_count += 1
+        steps_to_include = 1 + (len(chat.messages) - 1) // 2
+        summary_steps, _ = self._prepare_copied_trajectory_steps(steps_to_include)
+        summary_response, ref = await self._run_subagent(
+            prompt=self._single_summary_prompt(original_instruction),
+            message_history=chat.messages,
+            steps=summary_steps,
+            session_id=f"{self._session_id}-summarization-{self._summarization_count}-summary",
+            agent_name="terminus-2-summarization-summary",
+            filename_suffix="summary",
+            summary_text=f"Context summarization {self._summarization_count}: single structured hand-off",
+            subagent_name_for_logging="single hand-off LLM call",
+        )
+        current_screen = await session.capture_pane(capture_entire=False)
+        chat._messages = [chat.messages[0]]
+        chat.reset_response_chain()
+        handoff_prompt = self._single_handoff_prompt(original_instruction, summary_response.content, current_screen)
+        return handoff_prompt, [ref]
 
     def _answer_prompt(self, model_questions: str) -> str:
         n = self._handoff.get("answer_words")

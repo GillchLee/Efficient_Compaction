@@ -32,10 +32,11 @@ Every Decision carries the alpha/beta/gamma/Lp/summary_out it was computed with.
 """
 from __future__ import annotations
 
+import math
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 
-from .cost_model import Params, best_threshold, min_L, should_compact_now
+from .cost_model import Params, best_threshold, f, min_L, should_compact_now
 from .estimator import GEstimator
 
 
@@ -72,6 +73,11 @@ class ControllerConfig:
     learn_summary_out: bool = False  # summary_out from the summarization calls' completion tokens
     learn_gamma: bool = False      # gamma = 1 + (alpha - 1) * uncached fraction of the summary calls' input
     learn_weight: float = 2.0      # prior weight in compactions
+    # minimum window from information loss: a compaction costs `reacq_turns` extra turns of
+    # re-acquisition (analysis/reacquisition.py); keep that share of turns below reacq_eps,
+    # i.e. K >= reacq_turns / reacq_eps, and charge those turns in the per-turn cost
+    reacq_turns: float = 0.0
+    reacq_eps: float = 0.1
 
 
 @dataclass
@@ -216,8 +222,13 @@ class LimitController:
         p = self.params(s)
         if p is None:
             return None, "no_L0"
+        if c.reacq_turns > 0:
+            # extra turns per compaction re-read the window at ~f(L): C grows by reacq * f(L)
+            L_base = best_threshold(p)
+            p = replace(p, summary_fixed=p.summary_fixed + c.reacq_turns * f(L_base, p))
         L = best_threshold(p)
-        floor = p.L0 + self.Lp(s) + p.g * (c.min_window_turns - 1)
+        k_min = max(c.min_window_turns, math.ceil(c.reacq_turns / c.reacq_eps) if c.reacq_turns > 0 else 0)
+        floor = p.L0 + self.Lp(s) + p.g * (k_min - 1)
         reason = "formula"
         if L < floor:
             L, reason = floor, "floor_min_window"

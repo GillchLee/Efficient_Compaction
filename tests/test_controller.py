@@ -119,3 +119,18 @@ def test_learned_terms_track_observed_compactions():
     assert 8000 < dl.Lp < 10000 and 7500 < dl.summary_out < 9000
     assert abs(dl.gamma - (1 + 9 * ((0.0564 + 3 * 0.5) / 4))) < 0.05   # prior uncached 5.6% w=1, then 3 x 50%
     assert dl.limit > df.limit * 1.3
+
+
+def test_reacquisition_floor_raises_small_windows():
+    base = dict(mode="formula", Lp=3203, L0_mode="fixed", L0_fixed=1258, alpha=1.5, beta=2.5,
+                m=2.178, gamma=1.03, summary_out=4242, g_prior=1000, g_prior_weight=5)
+    plain = LimitController(ControllerConfig(**base)).on_prompt("s", "main", 2000.0)
+    floored = LimitController(ControllerConfig(**base, reacq_turns=1.5, reacq_eps=0.1)).on_prompt("s", "main", 2000.0)
+    # cheap prices (GLM-like) give a ~10K window; 1.5 re-acquired turns per compaction at <=10% => K >= 15
+    assert plain.limit < 1258 + 3203 + 1000 * 14
+    assert floored.limit >= 1258 + 3203 + 1000 * 14 and floored.reason == "floor_min_window"
+    # at Luna prices the charge for re-acquired turns moves L* up a little but the floor does not bind
+    luna = dict(base, alpha=10, beta=50, gamma=1.508)
+    a = LimitController(ControllerConfig(**luna)).on_prompt("s", "main", 2000.0)
+    b = LimitController(ControllerConfig(**luna, reacq_turns=1.5)).on_prompt("s", "main", 2000.0)
+    assert b.reason == "formula" and 1.02 < b.limit / a.limit < 1.2

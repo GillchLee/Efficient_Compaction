@@ -126,3 +126,33 @@ def test_prices_reload_updates_controller(tmp_path, monkeypatch):
     agent._update_subagent_metrics(SimpleNamespace(prompt_tokens=30000, completion_tokens=2000, cache_tokens=28000, cost_usd=0.0))
     s = agent._ctl.session("main")
     assert s._summ_prompt == 30000 and s._summ_out == 2000
+
+
+def test_single_handoff_replaces_three_calls(tmp_path):
+    agent = OptlimitTerminus2(logs_dir=tmp_path, model_name="openai/gpt-4o-mini", optlimit={"mode": "off"},
+                              handoff={"mode": "single", "summary_words": 600},
+                              proactive_summarization_threshold=0, record_terminal_session=False)
+    calls = []
+
+    async def fake_run_subagent(**kw):
+        calls.append(kw)
+        return SimpleNamespace(content="NOTE: files x,y; run ./check.sh"), SimpleNamespace(ref=kw["filename_suffix"])
+
+    class Session:
+        async def capture_pane(self, capture_entire=False):
+            return "$ ls\nx y"
+
+    agent._run_subagent = fake_run_subagent
+    agent._prepare_copied_trajectory_steps = lambda n: ([], 1)
+    chat = SimpleNamespace(messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "T"},
+                                     {"role": "assistant", "content": "a"}], reset_response_chain=lambda: None)
+    chat._messages = chat.messages
+    handoff, refs = asyncio.run(agent._summarize(chat, "TASK", Session()))
+    assert len(calls) == 1 and "approximately 600 words" in calls[0]["prompt"] and "**Status**" in calls[0]["prompt"]
+    assert calls[0]["message_history"] is not None and calls[0]["filename_suffix"] == "summary"
+    assert chat._messages == [{"role": "system", "content": "sys"}]       # next window: system + hand-off only
+    assert "**Original Task:** TASK" in handoff and "NOTE: files x,y" in handoff and "$ ls" in handoff
+    assert len(refs) == 1 and agent._summarization_count == 1
+    with pytest.raises(ValueError):
+        OptlimitTerminus2(logs_dir=tmp_path, model_name="openai/gpt-4o-mini", optlimit={"mode": "off"},
+                          handoff={"mode": "double"}, proactive_summarization_threshold=0, record_terminal_session=False)

@@ -17,6 +17,8 @@ Compaction condition (one of):
 
 --handoff summary_words=2600 --handoff min_questions=12 --handoff answer_words=2000
                      length targets for the three summarization prompts (bigger Lp)
+  --handoff mode=single --handoff summary_words=800
+                     one structured summary call instead of terminus-2's three (m=1)
 Environment: --env docker (default) or daytona; tasks from --tasks-dir, --tasks (names).
 Prints the output path; the file is a plain Harbor config and can be edited by hand.
 """
@@ -104,7 +106,10 @@ def main() -> int:
                 ol[k] = v
         kwargs["optlimit"] = ol
         if a.handoff:
-            kwargs["handoff"] = {kv.partition("=")[0]: int(kv.partition("=")[2]) for kv in a.handoff}
+            kwargs["handoff"] = {}
+            for kv in a.handoff:
+                k, _, v = kv.partition("=")
+                kwargs["handoff"][k] = int(v) if v.isdigit() else v
         agent = {"import_path": "optlimit.harbor_agent:OptlimitTerminus2"}
     else:
         agent = {"name": "terminus-2"}

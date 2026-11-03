@@ -45,6 +45,21 @@ export DOCKER_DEFAULT_PLATFORM=linux/amd64
 
 mkdir -p jobs/logs
 echo "$(date '+%F %T') start $JOB_NAME ($CONFIG, HB_CONTINUE_MODE=$HB_CONTINUE_MODE)" | tee -a "$LOG"
+
+# terminus-2 pipes the tmux pane into agent/terminus_2.pane for debugging only (the agent reads
+# the screen with capture-pane, the trajectory holds the observations). A command that floods
+# the terminal can grow it without bound (58 GB seen): keep it under PANE_MAX_MB.
+PANE_MAX_MB=${PANE_MAX_MB:-512}
+(
+  while sleep 60; do
+    find "$JOB_DIR" -name terminus_2.pane -size +"${PANE_MAX_MB}M" -print 2>/dev/null | while read -r f; do
+      echo "$(date '+%F %T') trimming $f ($(du -m "$f" | cut -f1) MB)" >>"$LOG"
+      truncate -s "${PANE_MAX_MB}M" "$f"
+    done
+  done
+) &
+TRIM_PID=$!
+trap 'kill $TRIM_PID 2>/dev/null' EXIT
 status=0
 if [[ -f "$JOB_DIR/config.json" ]]; then
   harbor jobs resume -p "$JOB_DIR" >>"$LOG" 2>&1 || status=$?
