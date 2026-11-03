@@ -1,0 +1,24 @@
+job,trial,task,condition,compactions,turns,Lp_med,rate_after,rate_base,excess_turns,reacq_turns_per_compaction,share_readonly,rates_by_pos
+luna_formula_nog,gdal_antimeridian_clip__01__UQt9VhX,gdal_antimeridian_clip,formula:terminus2-gpt-6-luna,48,1078,3861,0.661,0.505,1.55,1.55,0.58,1:0.71 2:0.90 3:0.79 4:0.70 5:0.66 6:0.57 7:0.62 8:0.60 9:0.52 10:0.53
+luna_formula_nog,seismo_cross_correlation_lag__01__V6SEnPs,seismo_cross_correlation_lag,formula:terminus2-gpt-6-luna,0,9,,,0.125,0,,0.0,
+luna_formula_nog,sqlite_wal_recovery_audit__02__Sn97WGN,sqlite_wal_recovery_audit,formula:terminus2-gpt-6-luna,1,32,3778,0.6,0.059,5.65,5.65,0.5,1:1.00 2:1.00 3:1.00 4:0.00 5:0.00 6:0.00 7:0.00 8:1.00 9:1.00 10:1.00
+lhtb2_t2_sc_luna_l40k,gdal_antimeridian_clip__01__KyJjw2K,gdal_antimeridian_clip,l40k,16,1021,4012,0.641,0.462,1.83,1.83,0.38,1:0.69 2:0.69 3:0.88 4:0.64 5:0.79 6:0.50 7:0.56 8:0.56 9:0.69 10:0.44
+lhtb2_t2_sc_luna_l40k,seismo_cross_correlation_lag__01__P99uVyd,seismo_cross_correlation_lag,l40k,0,13,,,0.143,0,,0.0,
+lhtb2_t2_sc_luna_l40k,sqlite_wal_recovery_audit__02__u7m8ztT,sqlite_wal_recovery_audit,l40k,22,879,4158,0.551,0.384,1.66,1.66,0.42,1:0.43 2:0.68 3:0.73 4:0.41 5:0.64 6:0.48 7:0.41 8:0.64 9:0.55 10:0.55
+lhtb2_t2_sc_luna_l120k,gdal_antimeridian_clip__01__Xtnqd74,gdal_antimeridian_clip,l120k,4,429,6319,0.475,0.543,0.87,0.87,0.21,1:0.50 2:1.00 3:0.75 4:0.50 5:0.25 6:0.25 7:0.00 8:0.25 9:0.75 10:0.50
+lhtb2_t2_sc_luna_l120k,seismo_cross_correlation_lag__01__7UukP3n,seismo_cross_correlation_lag,l120k,0,7,,,0,0,,,
+lhtb2_t2_sc_luna_l120k,sqlite_wal_recovery_audit__02__v4tLmvi,sqlite_wal_recovery_audit,l120k,3,297,6672,0.5,0.415,1.93,1.93,0.22,1:0.33 2:0.67 3:1.00 4:0.67 5:0.67 6:0.33 7:0.33 8:0.00 9:1.00 10:0.00
+lhtb2_t2_sameconv,gdal_antimeridian_clip__01__iQfFRyc,gdal_antimeridian_clip,native,0,919,,,0.608,0,,0.03,
+lhtb2_t2_sameconv,seismo_cross_correlation_lag__01__pMz6LX6,seismo_cross_correlation_lag,native,0,397,,,0.741,0,,0.21,
+lhtb2_t2_sameconv,sqlite_wal_recovery_audit__02__VTp5WjL,sqlite_wal_recovery_audit,native,0,148,,,0.328,0,,0.28,
+lhtb2_t2_sc_sonnet_l80k,gdal_antimeridian_clip__01__PaoYJDJ,gdal_antimeridian_clip,l80k,6,620,9130,0.077,0.023,0.95,0.95,0.0,1:0.00 2:0.00 3:0.00 4:0.00 5:0.50 6:0.00 7:0.50 8:0.00 10:0.00
+lhtb2_t2_sc_sonnet_l80k,seismo_cross_correlation_lag__01__gvm5jhL,seismo_cross_correlation_lag,l80k,0,24,,,0,0,,,
+lhtb2_t2_sc_sonnet_l80k_gdal,gdal_antimeridian_clip__01__u4T9aoB,gdal_antimeridian_clip,l80k,8,1032,9593,0.031,0.037,0.11,0.11,0.0,1:0.00 2:0.14 3:0.00 4:0.00 5:0.00 6:0.00 7:0.00 8:0.00 9:0.00 10:0.00
+lhtb2_t2_sc_sonnet_l80k_sqlite,sqlite_wal_recovery_audit__02__vWoebFJ,sqlite_wal_recovery_audit,l80k,6,948,9034,0.15,0,1.67,1.67,0.0,1:0.00 2:0.00 3:0.00 4:0.17 5:1.00 6:0.00 8:0.00 9:0.50
+luna10_l60k,2048__NDruq94,2048,l60k,12,2061,3265,1,0.997,0.03,0.03,0.0,1:1.00 2:1.00 3:1.00 4:1.00 5:1.00 6:1.00 7:1.00 8:1.00 9:1.00 10:1.00
+luna10_l60k,apex-ib244-matter__2FWFUgs,apex-ib244-matter,l60k,32,1067,6717,0.656,0.529,1.25,1.25,0.17,1:0.88 2:0.84 3:0.71 4:0.66 5:0.54 6:0.68 7:0.53 8:0.62 9:0.57 10:0.52
+luna10_l60k,apex-investment-banking-matter__rMhfzFy,apex-investment-banking-matt,l60k,27,877,5819,0.645,0.624,0.5,0.5,0.12,1:0.96 2:0.68 3:0.56 4:0.65 5:0.54 6:0.48 7:0.62 8:0.62 9:0.63 10:0.69
+luna10_l60k,apex-law433-matter__XnCg2wD,apex-law433-matter,l60k,22,984,5928,0.656,0.528,1.32,1.32,0.08,1:1.00 2:0.71 3:0.86 4:0.55 5:0.55 6:0.64 7:0.50 8:0.59 9:0.59 10:0.59
+luna10_l60k,chess-mate__SUYk2ZC,chess-mate,l60k,12,1427,3777,0.938,0.822,1.23,1.23,0.0,1:1.00 2:1.00 3:1.00 4:1.00 5:0.82 6:1.00 7:0.78 8:0.90 9:0.90 10:1.00
+luna10_l60k,spot-scheduler-traces__eGr4MEF,spot-scheduler-traces,l60k,13,694,4469,0.35,0.341,0.79,0.79,0.03,1:0.42 2:0.60 3:0.12 4:0.25 5:0.36 6:0.67 7:0.10 8:0.22 9:0.45 10:0.27
+smoke_sonnet_l20k,seismo_cross_correlation_lag__01__5ouUG2d,seismo_cross_correlation_lag,l20k,2,47,4560,0.1,0,0.5,0.5,0.0,1:0.00 2:0.00 3:0.00 4:0.00 5:0.00 7:0.50 9:0.00
