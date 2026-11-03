@@ -1,8 +1,123 @@
 diff --git a/harbor/src/harbor/agents/terminus_2/terminus_2.py b/harbor/src/harbor/agents/terminus_2/terminus_2.py
-index bcd0473..6191371 100644
+index bcd0473..047a00b 100644
 --- a/harbor/src/harbor/agents/terminus_2/terminus_2.py
 +++ b/harbor/src/harbor/agents/terminus_2/terminus_2.py
-@@ -1068,11 +1068,26 @@ so ask everything you need to know."""
+@@ -749,6 +749,52 @@ class Terminus2(BaseAgent):
+ 
+         return response, trajectory_ref
+ 
++    # Hand-off prompts of the three summarization calls. Subclasses may override
++    # them (e.g. to change how long the summary / questions / answers should be).
++    def _summary_prompt(self, original_instruction: str) -> str:
++        return f"""You are about to hand off your work to another AI agent.
++            Please provide a comprehensive summary of what you have
++            accomplished so far on this task:
++
++Original Task: {original_instruction}
++
++Based on the conversation history, please provide a detailed summary covering:
++1. **Major Actions Completed** - List each significant command you executed
++            and what you learned from it.
++2. **Important Information Learned** - A summary of crucial findings, file
++            locations, configurations, error messages, or system state discovered.
++3. **Challenging Problems Addressed** - Any significant issues you
++            encountered and how you resolved them.
++4. **Current Status** - Exactly where you are in the task completion process.
++
++
++Be comprehensive and detailed. The next agent needs to understand everything
++            that has happened so far in order to continue."""
++
++    def _question_prompt(
++        self, original_instruction: str, summary: str, current_screen: str
++    ) -> str:
++        return f"""You are picking up work from a previous AI agent on this task:
++
++**Original Task:** {original_instruction}
++
++**Summary from Previous Agent:**
++{summary}
++
++**Current Terminal Screen:**
++{current_screen}
++
++Please begin by asking several questions (at least five, more if necessary)
++about the current state of the solution that are not answered in the summary
++from the prior agent. After you ask these questions you will be on your own,
++so ask everything you need to know."""
++
++    def _answer_prompt(self, model_questions: str) -> str:
++        return (
++            "The next agent has a few questions for you, please answer each of them one by one in detail:\n\n"
++            + model_questions
++        )
++
+     async def _summarize(
+         self, chat: Chat, original_instruction: str, session: TmuxSession
+     ) -> tuple[str, list[SubagentTrajectoryRef] | None]:
+@@ -815,24 +861,7 @@ class Terminus2(BaseAgent):
+             steps_to_include
+         )
+ 
+-        summary_prompt = f"""You are about to hand off your work to another AI agent.
+-            Please provide a comprehensive summary of what you have
+-            accomplished so far on this task:
+-
+-Original Task: {original_instruction}
+-
+-Based on the conversation history, please provide a detailed summary covering:
+-1. **Major Actions Completed** - List each significant command you executed
+-            and what you learned from it.
+-2. **Important Information Learned** - A summary of crucial findings, file
+-            locations, configurations, error messages, or system state discovered.
+-3. **Challenging Problems Addressed** - Any significant issues you
+-            encountered and how you resolved them.
+-4. **Current Status** - Exactly where you are in the task completion process.
+-
+-
+-Be comprehensive and detailed. The next agent needs to understand everything
+-            that has happened so far in order to continue."""
++        summary_prompt = self._summary_prompt(original_instruction)
+ 
+         summary_response, summary_trajectory_ref = await self._run_subagent(
+             prompt=summary_prompt,
+@@ -853,20 +882,9 @@ Be comprehensive and detailed. The next agent needs to understand everything
+         )
+         questions_steps = []
+ 
+-        question_prompt = f"""You are picking up work from a previous AI agent on this task:
+-
+-**Original Task:** {original_instruction}
+-
+-**Summary from Previous Agent:**
+-{summary_response.content}
+-
+-**Current Terminal Screen:**
+-{current_screen}
+-
+-Please begin by asking several questions (at least five, more if necessary)
+-about the current state of the solution that are not answered in the summary
+-from the prior agent. After you ask these questions you will be on your own,
+-so ask everything you need to know."""
++        question_prompt = self._question_prompt(
++            original_instruction, summary_response.content, current_screen
++        )
+ 
+         questions_response, questions_trajectory_ref = await self._run_subagent(
+             prompt=question_prompt,
+@@ -921,10 +939,7 @@ so ask everything you need to know."""
+         )
+         step_id_counter += 1
+ 
+-        answer_request_prompt = (
+-            "The next agent has a few questions for you, please answer each of them one by one in detail:\n\n"
+-            + model_questions
+-        )
++        answer_request_prompt = self._answer_prompt(model_questions)
+ 
+         # The answer subagent should see: unwound chat history + summary prompt + summary response
+         answers_message_history = chat.messages + [
+@@ -1068,11 +1083,26 @@ so ask everything you need to know."""
  
                      short_prompt = f"Briefly continue this task: {original_instruction}\n\nCurrent state: {limited_screen}\n\nNext steps (2-3 sentences):"
  
@@ -31,7 +146,7 @@ index bcd0473..6191371 100644
                      self.logger.debug("SUMMARIZATION: Short summary succeeded")
                  except Exception as e:
                      self.logger.error(f"SUMMARIZATION: Short summary failed: {e}")
-@@ -1337,6 +1352,7 @@ so ask everything you need to know."""
+@@ -1337,6 +1367,7 @@ so ask everything you need to know."""
              tokens_before_input = chat.total_input_tokens
              tokens_before_output = chat.total_output_tokens
              tokens_before_cache = chat.total_cache_tokens
@@ -39,7 +154,7 @@ index bcd0473..6191371 100644
              cost_before = chat.total_cost
  
              (
-@@ -1448,6 +1464,10 @@ so ask everything you need to know."""
+@@ -1448,6 +1479,10 @@ so ask everything you need to know."""
                              cached_tokens=cache_tokens_used
                              if cache_tokens_used > 0
                              else None,
@@ -50,7 +165,7 @@ index bcd0473..6191371 100644
                              cost_usd=step_cost if step_cost > 0 else None,
                              prompt_token_ids=llm_response.prompt_token_ids,
                              completion_token_ids=llm_response.completion_token_ids,
-@@ -1582,6 +1602,10 @@ so ask everything you need to know."""
+@@ -1582,6 +1617,10 @@ so ask everything you need to know."""
                          cached_tokens=cache_tokens_used
                          if cache_tokens_used > 0
                          else None,
@@ -61,7 +176,7 @@ index bcd0473..6191371 100644
                          cost_usd=step_cost if step_cost > 0 else None,
                          prompt_token_ids=llm_response.prompt_token_ids,
                          completion_token_ids=llm_response.completion_token_ids,
-@@ -1883,6 +1907,9 @@ so ask everything you need to know."""
+@@ -1883,6 +1922,9 @@ so ask everything you need to know."""
                          prompt_tokens=usage_info.prompt_tokens,
                          completion_tokens=usage_info.completion_tokens,
                          cached_tokens=usage_info.cache_tokens,

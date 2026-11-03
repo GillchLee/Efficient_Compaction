@@ -28,6 +28,15 @@ stock threshold check still runs (safety net). Every decision is appended to
 
 `mode: off` never compacts on its own (stock behaviour) but still logs the prompts, so the
 same agent class can run the native baseline.
+
+Hand-off size (Lp). The post-compaction prompt is system prompt + task + summary + terminal
+screen + questions + answers. An optional `handoff:` block sets length targets for the three
+summarization calls (stock prompts when absent):
+
+          handoff:
+            summary_words: 2600   # "approximately N words" in the summary prompt
+            min_questions: 12     # "at least N questions" (stock: five)
+            answer_words: 2000    # "approximately N words in total" in the answer prompt
 """
 from __future__ import annotations
 
@@ -40,15 +49,57 @@ from harbor.agents.terminus_2.terminus_2 import Terminus2
 from .controller import LimitController, config_from_spec
 
 class OptlimitTerminus2(Terminus2):
-    def __init__(self, logs_dir: Path, model_name: str | None = None, optlimit: dict | None = None, **kwargs):
+    HANDOFF_KEYS = ("summary_words", "min_questions", "answer_words")
+
+    def __init__(self, logs_dir: Path, model_name: str | None = None, optlimit: dict | None = None,
+                 handoff: dict | None = None, **kwargs):
         super().__init__(logs_dir=logs_dir, model_name=model_name, **kwargs)
         self._ol_cfg = config_from_spec(optlimit)
+        self._handoff = dict(handoff or {})
+        unknown = set(self._handoff) - set(self.HANDOFF_KEYS)
+        if unknown:
+            raise ValueError(f"handoff: unknown keys {sorted(unknown)} (allowed: {self.HANDOFF_KEYS})")
         self._ctl = LimitController(self._ol_cfg)
         self._ol_key = "main"
         self._ol_seen = None          # last UsageInfo object the controller has consumed
         self._ol_boundary = False     # a summarization happened: the next prompt starts a window
         self._ol_path = Path(logs_dir) / "optlimit_decisions.jsonl"
-        self.logger.info(f"optlimit controller: {self._ol_cfg}")
+        self.logger.info(f"optlimit controller: {self._ol_cfg}; handoff: {self._handoff or 'stock'}")
+
+    # ------------------------------------------------------------------ hand-off prompts
+    def _summary_prompt(self, original_instruction: str) -> str:
+        base = super()._summary_prompt(original_instruction)
+        n = self._handoff.get("summary_words")
+        if not n:
+            return base
+        return base + (
+            f"\n\nWrite approximately {int(n)} words. Be concrete rather than general: quote exact file"
+            " paths, commands, code snippets, parameter values, numeric results, and error messages"
+            " verbatim wherever they matter for continuing the work."
+        )
+
+    def _question_prompt(self, original_instruction: str, summary: str, current_screen: str) -> str:
+        base = super()._question_prompt(original_instruction, summary, current_screen)
+        n = self._handoff.get("min_questions")
+        if not n:
+            return base
+        return base.replace(
+            "asking several questions (at least five, more if necessary)",
+            f"asking several questions (at least {int(n)}, more if necessary)",
+        ) + (
+            "\nMake each question specific (exact files, commands, values, failing checks) so that"
+            " the answers can be acted on directly."
+        )
+
+    def _answer_prompt(self, model_questions: str) -> str:
+        n = self._handoff.get("answer_words")
+        if not n:
+            return super()._answer_prompt(model_questions)
+        return (
+            "The next agent has a few questions for you, please answer each of them one by one in detail"
+            f" (approximately {int(n)} words in total). Quote exact commands, file paths, code and values"
+            " from the conversation; do not summarize where the exact text matters:\n\n" + model_questions
+        )
 
     # ------------------------------------------------------------------ logging
     def _ol_log(self, rec: dict) -> None:

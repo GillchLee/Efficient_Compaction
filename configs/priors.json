@@ -42,6 +42,17 @@
    "summary_out": 4242,
    "phi": 0.0267,
    "_detail": "L0 = median cache read at the first compacted turn, Lp = median cache write there (full post-compaction prompt 5694); g median 717 / mean 840 (q25 147, q75 1202); L_before median 40582; summarization input 2.178 x L, uncached fraction 0.056; first prompt 1261."
+  },
+  "terminus2-gpt-6-luna-lp10k": {
+   "source": "projection for handoff summary_words=2600 min_questions=12 answer_words=2000 (not yet measured); other fields from terminus2-gpt-6-luna",
+   "Lp": 10000,
+   "L0": 1258,
+   "g": 717,
+   "m": 2.178,
+   "gamma": 1.508,
+   "summary_out": 8600,
+   "phi": 0.0,
+   "_detail": "Lp = task 1.1-1.7K + screen ~0.6K + template 0.15K + summary ~3.9K + questions ~0.75K + answers ~3K; summary_out = those 7.65K visible tokens + ~1K reasoning. Replace with fit_priors.py output once a run exists."
   }
  }
 }

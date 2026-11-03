@@ -75,3 +75,20 @@ def test_mode_off_never_compacts(tmp_path):
         assert asyncio.run(agent._check_proactive_summarization(chat, "task", None)) is None
     recs = [json.loads(l) for l in (tmp_path / "optlimit_decisions.jsonl").read_text().splitlines()]
     assert len(recs) == 3 and all(r["limit"] is None for r in recs)
+
+
+def test_handoff_budgets_change_only_the_three_prompts(tmp_path):
+    stock = _agent(tmp_path, {"mode": "off"})
+    sized = OptlimitTerminus2(logs_dir=tmp_path, model_name="openai/gpt-4o-mini", optlimit={"mode": "off"},
+                              handoff={"summary_words": 2600, "min_questions": 12, "answer_words": 2000},
+                              proactive_summarization_threshold=0, record_terminal_session=False)
+    assert stock._summary_prompt("T") == harbor.agents.terminus_2.terminus_2.Terminus2._summary_prompt(stock, "T")
+    assert "at least five" in stock._question_prompt("T", "S", "screen")
+    s, q, a = sized._summary_prompt("T"), sized._question_prompt("T", "S", "screen"), sized._answer_prompt("Q1?")
+    assert s.startswith(stock._summary_prompt("T")) and "approximately 2600 words" in s
+    assert "at least 12, more if necessary" in q and "at least five" not in q and "**Original Task:** T" in q
+    assert "approximately 2000 words" in a and a.endswith("Q1?")
+    with pytest.raises(ValueError):
+        OptlimitTerminus2(logs_dir=tmp_path, model_name="openai/gpt-4o-mini", optlimit={"mode": "off"},
+                          handoff={"summary_tokens": 1}, proactive_summarization_threshold=0,
+                          record_terminal_session=False)
