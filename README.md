@@ -126,6 +126,19 @@ python analysis/replay.py jobs/sonnet-5-5_* --prior terminus2-sonnet-5-5 --price
 - `fit_priors.py`: g(턴당 prompt 증가, 중앙값), L0(압축 직후 턴의 cache read), Lp(그 턴의 cache write; L0 + Lp 가 압축 직후 prompt), φ(Lp 의 L 의존, 창 크기가 2개 이상일 때), m(요약 호출 입력 / L), γ(요약 입력의 실효 단가 배수), summary_out.
 - `replay.py`: 기록된 턴별 증분을 컨트롤러에 다시 먹여 nocompact / fixed:L / formula 정책의 턴당 비용을 같은 단가로 계산합니다. `real_cost_per_turn` 은 그 궤적의 실제 집계이므로, 실제로 창 L 로 돌린 궤적의 `fixed:L` 리플레이가 실측과 맞는지로 비용 모델을 검증합니다 (Sonnet 80K · Luna 40K/120K 궤적에서 2% 이내).
 
+## 적응형 한도 (가격비 α, β 가 바뀔 때)
+
+L\* = L0 + Lp − g + √(2gC), C = (α−1)(Lp−g) + mγ(L0+Lp−g) + β·O_s 이므로 가격은 α(write/read)·β(output/read) 로만 들어온다. 정책이 가격·관측을 따라가게 하는 네 가지 스위치(`optlimit:` 블록):
+
+| 키 | 효과 |
+|---|---|
+| `prices_reload: true` | 결정마다 `configs/prices.json` 의 변경을 감지해 `prices` 행을 다시 읽고 α, β 를 갱신(결정 로그에 `prices_reloaded`) |
+| `learn_lp: true` | Lp 를 창 시작의 prompt − cached 관측으로 갱신(사전값 가중 `learn_weight` 회) |
+| `learn_summary_out: true` | O_s 를 요약 호출들의 completion 합으로 갱신 |
+| `learn_gamma: true` | γ = 1 + (α−1)·u, u 는 요약 호출 입력의 cache miss 비율 관측 |
+
+분석: `analysis/price_sensitivity.py --prior <prior>` 가 공개 가격표별 L\*, α×β 격자, 고정 창의 후회, 탄력성을 낸다(`docs/price_sensitivity_{luna,sonnet}.md`). `analysis/replay.py --price-shift TURN:ROW` 는 궤적 중간의 가격 변경을 재생한다. 배경·문헌·실험 계획은 `docs/adaptive_limit_plan.md`.
+
 ## 실험 설계
 
 - **압축 창.** `--limit N` 은 API 가 보고한 prompt 가 N 에 닿으면 terminus-2 의 요약을 부릅니다. 예전 방식(`--native-threshold`)은 terminus-2 가 남은 컨텍스트 = 모델 한도 − litellm 로컬 토큰 수 < threshold 일 때 요약하므로 창 W 를 `threshold = 한도 − W` 로 만들었습니다(gpt-6-luna 922k: 80k → 842000). `model_info`로 컨텍스트 한도를 바꾸는 방법은 LiteLLM 전역 상태를 바꿔 같은 프로세스의 trial끼리 섞이므로 쓰지 않습니다.
