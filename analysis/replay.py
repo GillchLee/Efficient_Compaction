@@ -72,19 +72,28 @@ def real_cost(rows: list[dict], pr: Prices) -> float:
 
 
 def simulate(policy: str, cfg: ControllerConfig, inc: list, outs: list[int], first: int,
-             pr: Prices) -> dict:
+             pr: Prices, shift: tuple[int, Prices] | None = None) -> dict:
+    """Replay one trial under a policy.  `shift` = (turn, prices): from that turn on the
+    tokens are billed at the new prices and the formula controller is told the new
+    alpha/beta (update_prices), as the harbor agent does on a prices reload."""
     ctl = LimitController(cfg)
     key = "t"
     T = len(outs)
     P, read_t, write_t = first, 0, first
     read = write = out = summ_in = summ_out = 0.0
+    read2 = write2 = out2 = summ_in2 = summ_out2 = 0.0   # after the shift
     comps = 0
     limits = []
     boundary = False
+    shifted = False
     for t in range(T):
-        read += read_t
-        write += write_t
-        out += outs[t]
+        if shift is not None and not shifted and t >= shift[0]:
+            shifted = True
+            ctl.update_prices(shift[1].alpha, shift[1].beta, note="replay shift")
+        if shifted:
+            read2 += read_t; write2 += write_t; out2 += outs[t]
+        else:
+            read += read_t; write += write_t; out += outs[t]
         d = ctl.on_prompt(key, "main", float(P), cached=float(read_t), window_start_hint=boundary)
         boundary = False
         if d.limit is not None:
@@ -97,8 +106,12 @@ def simulate(policy: str, cfg: ControllerConfig, inc: list, outs: list[int], fir
             m = (p.m if p else cfg.m) or 0.0
             gamma = p.gamma if p else cfg.gamma
             so = p.summary_out_at(P) if p else (cfg.summary_out or lp)
-            summ_in += m * P * gamma
-            summ_out += so
+            if shifted:
+                summ_in2 += m * P * gamma; summ_out2 += so
+            else:
+                summ_in += m * P * gamma; summ_out += so
+            if cfg.learn_lp or cfg.learn_summary_out or cfg.learn_gamma:
+                ctl.note_summary_usage(key, m * P, cached=m * P * (1 - (gamma - 1) / max(cfg.alpha - 1, 1e-9)), completion=so)
             comps += 1
             L0 = ctl.L0(ctl.session(key)) or 0.0
             read_t, write_t = L0, lp
@@ -110,10 +123,12 @@ def simulate(policy: str, cfg: ControllerConfig, inc: list, outs: list[int], fir
             read_t, write_t = P, max(step, 0.0)
             P = P + max(step, 0.0)
     cost = pr.cost_usd(read + summ_in, write, out + summ_out)
+    if shift is not None:
+        cost += shift[1].cost_usd(read2 + summ_in2, write2, out2 + summ_out2)
     return {"policy": policy, "compactions": comps,
             "limit_mean": round(st.mean(limits)) if limits else "",
-            "read": round(read), "write": round(write), "out": round(out),
-            "summ_in": round(summ_in), "summ_out": round(summ_out),
+            "read": round(read + read2), "write": round(write + write2), "out": round(out + out2),
+            "summ_in": round(summ_in + summ_in2), "summ_out": round(summ_out + summ_out2),
             "cost_usd": round(cost, 4), "cost_per_turn": round(cost / T, 5)}
 
 
@@ -126,14 +141,21 @@ def main() -> int:
     ap.add_argument("--no-formula", action="store_true")
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                     help="controller field override for the formula policy")
+    ap.add_argument("--price-shift", metavar="TURN:PRICES_ROW",
+                    help="from TURN on, bill at this prices row and tell the formula controller "
+                         "(fixed policies keep their window: the regret of not adapting)")
     ap.add_argument("--out", type=Path)
     a = ap.parse_args()
 
     pr = load_prices(a.prices)
+    shift = None
+    if a.price_shift:
+        t_s, _, row = a.price_shift.partition(":")
+        shift = (int(t_s), load_prices(row))
     base = {"prior": a.prior, "prices": a.prices}
     for kv in a.set:
         k, _, v = kv.partition("=")
-        base[k] = json.loads(v) if v.replace(".", "", 1).lstrip("-").isdigit() else v
+        base[k] = json.loads(v) if v.replace(".", "", 1).lstrip("-").isdigit() or v in ("true", "false", "null") else v
     policies: list[tuple[str, ControllerConfig]] = [("nocompact", config_from_spec({**base, "mode": "off"}))]
     for L in a.limits:
         policies.append((f"fixed:{L}", config_from_spec({**base, "mode": "fixed", "fixed_limit": L, "lookahead": 0})))
@@ -155,7 +177,7 @@ def main() -> int:
             outs = [_int(r["completion_tokens"]) for r in main]
             rc = real_cost(tr, pr)
             for name, cfg in policies:
-                sim = simulate(name, cfg, inc, outs, _int(main[0]["prompt_tokens"]), pr)
+                sim = simulate(name, cfg, inc, outs, _int(main[0]["prompt_tokens"]), pr, shift)
                 rows.append({"job": d.name, "trial": trial, "task": prefill_stats.short_task(m["task"]),
                              "model": m["model"], "condition": m["condition"], "turns": len(main), **sim,
                              "real_cost_usd": round(rc, 4), "real_cost_per_turn": round(rc / len(main), 5)})

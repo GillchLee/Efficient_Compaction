@@ -29,6 +29,14 @@ stock threshold check still runs (safety net). Every decision is appended to
 `mode: off` never compacts on its own (stock behaviour) but still logs the prompts, so the
 same agent class can run the native baseline.
 
+Adaptive terms. `learn_lp / learn_summary_out / learn_gamma: true` in the optlimit block make
+the controller replace the prior Lp, summary output and cache multiplier by what this run's
+compactions show (the agent feeds every summarization call's usage to the controller through
+`_update_subagent_metrics`). `prices_reload: true` makes the agent re-read its `prices` row
+from configs/prices.json whenever the file changes and hand the new alpha/beta to the
+controller, so a price change (or a cache-TTL change) moves L* mid-run; each decision record
+carries the alpha/beta/gamma/Lp/summary_out it used.
+
 Hand-off size (Lp). The post-compaction prompt is system prompt + task + summary + terminal
 screen + questions + answers. An optional `handoff:` block sets length targets for the three
 summarization calls (stock prompts when absent):
@@ -46,7 +54,7 @@ from pathlib import Path
 
 from harbor.agents.terminus_2.terminus_2 import Terminus2
 
-from .controller import LimitController, config_from_spec
+from .controller import LimitController, config_from_spec, load_prices
 
 class OptlimitTerminus2(Terminus2):
     HANDOFF_KEYS = ("summary_words", "min_questions", "answer_words")
@@ -54,6 +62,9 @@ class OptlimitTerminus2(Terminus2):
     def __init__(self, logs_dir: Path, model_name: str | None = None, optlimit: dict | None = None,
                  handoff: dict | None = None, **kwargs):
         super().__init__(logs_dir=logs_dir, model_name=model_name, **kwargs)
+        optlimit = dict(optlimit or {})
+        self._ol_prices_row = optlimit.get("prices") if optlimit.get("prices_reload") else None
+        self._ol_prices_mtime = self._prices_mtime() if self._ol_prices_row else None
         self._ol_cfg = config_from_spec(optlimit)
         self._handoff = dict(handoff or {})
         unknown = set(self._handoff) - set(self.HANDOFF_KEYS)
@@ -110,6 +121,43 @@ class OptlimitTerminus2(Terminus2):
         except OSError as e:  # never break the run because of the log
             self.logger.warning(f"optlimit: cannot write {self._ol_path}: {e}")
 
+    # ------------------------------------------------------------------ adaptivity
+    @staticmethod
+    def _prices_path() -> Path:
+        return Path(__file__).resolve().parent.parent / "configs" / "prices.json"
+
+    def _prices_mtime(self) -> float | None:
+        try:
+            return self._prices_path().stat().st_mtime
+        except OSError:
+            return None
+
+    def _maybe_reload_prices(self) -> dict | None:
+        """Re-read the prices row when configs/prices.json changed; returns the update record."""
+        if not self._ol_prices_row:
+            return None
+        mtime = self._prices_mtime()
+        if mtime is None or mtime == self._ol_prices_mtime:
+            return None
+        self._ol_prices_mtime = mtime
+        try:
+            pr = load_prices(self._ol_prices_row, config_dir=self._prices_path().parent)
+        except (OSError, KeyError, ValueError) as e:
+            self.logger.warning(f"optlimit: prices reload failed: {e}")
+            return None
+        if pr.alpha == self._ol_cfg.alpha and pr.beta == self._ol_cfg.beta:
+            return None
+        self._ctl.update_prices(pr.alpha, pr.beta, note=f"reload {self._ol_prices_row}")
+        self.logger.info(f"optlimit: prices reloaded alpha={pr.alpha} beta={pr.beta}")
+        return {"alpha": pr.alpha, "beta": pr.beta}
+
+    def _update_subagent_metrics(self, usage_info) -> None:
+        super()._update_subagent_metrics(usage_info)
+        if usage_info:
+            self._ctl.note_summary_usage(self._ol_key, float(usage_info.prompt_tokens or 0),
+                                         cached=float(usage_info.cache_tokens or 0),
+                                         completion=float(usage_info.completion_tokens or 0))
+
     # ------------------------------------------------------------------ the hook
     async def _check_proactive_summarization(self, chat, original_instruction, session):
         usage = getattr(chat, "last_usage", None)
@@ -117,12 +165,15 @@ class OptlimitTerminus2(Terminus2):
             # first episode of a chat, or the previous episode made no new main call
             return await super()._check_proactive_summarization(chat, original_instruction, session)
         self._ol_seen = usage
+        reloaded = self._maybe_reload_prices()
 
         d = self._ctl.on_prompt(self._ol_key, "main", float(usage.prompt_tokens),
                                 cached=float(usage.cache_tokens or 0), window_start_hint=self._ol_boundary)
         self._ol_boundary = False
         rec = {"ts": time.time(), "prompt": usage.prompt_tokens, "cached": usage.cache_tokens,
                **d.as_dict(), "action": None}
+        if reloaded:
+            rec["prices_reloaded"] = reloaded
 
         result = None
         if d.compact_now:

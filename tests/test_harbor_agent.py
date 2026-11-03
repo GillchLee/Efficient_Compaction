@@ -92,3 +92,37 @@ def test_handoff_budgets_change_only_the_three_prompts(tmp_path):
         OptlimitTerminus2(logs_dir=tmp_path, model_name="openai/gpt-4o-mini", optlimit={"mode": "off"},
                           handoff={"summary_tokens": 1}, proactive_summarization_threshold=0,
                           record_terminal_session=False)
+
+
+def test_prices_reload_updates_controller(tmp_path, monkeypatch):
+    # start-up reads the repo's configs/prices.json (gpt-6-luna: alpha 10, beta 50); the reload
+    # path is pointed at a temp copy that we then change
+    prices = tmp_path / "prices.json"
+    prices.write_text(json.dumps({"models": {"gpt-6-luna": {"read": 0.01, "write": 0.1, "output": 0.5}}}))
+    monkeypatch.setattr(OptlimitTerminus2, "_prices_path", staticmethod(lambda: prices))
+    agent = OptlimitTerminus2(logs_dir=tmp_path, model_name="openai/gpt-4o-mini",
+                              optlimit={"mode": "formula", "prices": "gpt-6-luna", "prices_reload": True, "Lp": 3203,
+                                        "L0_mode": "fixed", "L0_fixed": 1258, "m": 2.178, "gamma": 1.508,
+                                        "summary_out": 4242, "g_prior": 717, "g_prior_weight": 5},
+                              proactive_summarization_threshold=0, record_terminal_session=False)
+    agent._count_total_tokens = lambda chat: 0
+    chat = FakeChat()
+
+    async def step(prompt, cached):
+        chat.last_usage = SimpleNamespace(prompt_tokens=prompt, cache_tokens=cached, completion_tokens=10)
+        return await agent._check_proactive_summarization(chat, "task", None)
+
+    asyncio.run(step(2000, 0))
+    assert agent._ol_cfg.alpha == 10 and agent._ol_cfg.beta == 50
+    # the price sheet changes on disk (write premium + dearer output): next decision adapts
+    prices.write_text(json.dumps({"models": {"gpt-6-luna": {"read": 0.01, "write": 0.25, "output": 1.0}}}))
+    import os, time
+    os.utime(prices, (time.time() + 5, time.time() + 5))
+    asyncio.run(step(2700, 2000))
+    assert agent._ol_cfg.alpha == 25 and agent._ol_cfg.beta == 100
+    recs = [json.loads(l) for l in (tmp_path / "optlimit_decisions.jsonl").open()]
+    assert recs[-1]["prices_reloaded"] == {"alpha": 25.0, "beta": 100.0} and recs[-1]["alpha"] == 25.0
+    # summary-call usage reaches the controller
+    agent._update_subagent_metrics(SimpleNamespace(prompt_tokens=30000, completion_tokens=2000, cache_tokens=28000, cost_usd=0.0))
+    s = agent._ctl.session("main")
+    assert s._summ_prompt == 30000 and s._summ_out == 2000

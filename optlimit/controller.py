@@ -13,6 +13,22 @@ turns compact_now into terminus-2's own summarization, so the harness runs its
 With g_prior_weight = 0 the estimator starts from nothing: no L* is computed until
 the first growth observation (limit() returns None, reason "no_g"), after that
 g_hat is the plain (clipped) mean of the observed increments of the session.
+
+Adaptivity.  L* is a function of the price ratios alpha = write/read and beta =
+output/read as much as of g: L* = L0 + Lp - g + sqrt(2 g C) with
+C = (alpha-1)(Lp-g) + m gamma (L0+Lp-g) + beta O_s.  Two things make the policy
+follow the ratios instead of freezing them at start-up:
+
+* `update_prices(alpha, beta)` replaces the ratios for every later decision (the
+  harbor agent calls it when configs/prices.json changes on disk, `prices_reload`);
+  gamma is re-derived from the observed uncached fraction when `learn_gamma` is on,
+  so a new alpha propagates into the summary-read term as well.
+* `learn_lp` / `learn_summary_out` / `learn_gamma` replace the prior Lp, O_s and
+  gamma by shrunken means of what the session's own compactions showed
+  (prior weight `learn_weight` compactions), so C - and with it L* - tracks the
+  actual hand-off size and cache behaviour of this model/harness.
+
+Every Decision carries the alpha/beta/gamma/Lp/summary_out it was computed with.
 """
 from __future__ import annotations
 
@@ -51,6 +67,11 @@ class ControllerConfig:
     lookahead: float = 1.0
     horizon: int | None = None     # expected total turns; enables PDF 6(a) short-task rule
     boundary_ratio: float = 0.6    # P_t < ratio * P_{t-1} => compaction happened (fallback detection)
+    # online learning of the compaction-cost terms (prior = the fields above)
+    learn_lp: bool = False         # Lp from prompt - cached at each window start
+    learn_summary_out: bool = False  # summary_out from the summarization calls' completion tokens
+    learn_gamma: bool = False      # gamma = 1 + (alpha - 1) * uncached fraction of the summary calls' input
+    learn_weight: float = 2.0      # prior weight in compactions
 
 
 @dataclass
@@ -63,6 +84,11 @@ class Decision:
     turn_idx: int = 0
     window_start: bool = False
     reason: str = ""
+    alpha: float | None = None
+    beta: float | None = None
+    gamma: float | None = None
+    Lp: float | None = None
+    summary_out: float | None = None
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -85,6 +111,13 @@ class SessionState:
     prompts: list[float] = field(default_factory=list)
     kinds: list[str] = field(default_factory=list)
     limits: list[float | None] = field(default_factory=list)
+    # observations for the learned terms
+    lp_obs: list[float] = field(default_factory=list)
+    so_obs: list[float] = field(default_factory=list)
+    unc_obs: list[float] = field(default_factory=list)   # uncached fraction of summary-call input
+    _summ_prompt: float = 0.0     # accumulated over the calls of the compaction in progress
+    _summ_cached: float = 0.0
+    _summ_out: float = 0.0
 
     def summary(self) -> dict:
         return {
@@ -100,6 +133,52 @@ class LimitController:
     def __init__(self, cfg: ControllerConfig):
         self.cfg = cfg
         self.sessions: dict[str, SessionState] = {}
+        self.price_updates: list[dict] = []
+
+    # ------------------------------------------------------------ adaptivity
+    def update_prices(self, alpha: float, beta: float | None = None, note: str = "") -> None:
+        """New price ratios for every later decision (prices changed, cache TTL changed, ...)."""
+        self.cfg.alpha = float(alpha)
+        if beta is not None:
+            self.cfg.beta = float(beta)
+        self.price_updates.append({"ts": time.time(), "alpha": self.cfg.alpha, "beta": self.cfg.beta, "note": note})
+
+    def note_summary_usage(self, key: str, prompt: float, cached: float = 0.0, completion: float = 0.0) -> None:
+        """Usage of one summarization call; folded into the learned terms at the next window start."""
+        s = self.session(key)
+        s._summ_prompt += float(prompt)
+        s._summ_cached += float(cached)
+        s._summ_out += float(completion)
+
+    def _flush_compaction_obs(self, s: SessionState, prompt: float, cached: float) -> None:
+        if prompt - cached > 0:
+            s.lp_obs.append(prompt - cached)
+        if s._summ_out > 0:
+            s.so_obs.append(s._summ_out)
+        if s._summ_prompt > 0:
+            s.unc_obs.append(max(0.0, 1.0 - s._summ_cached / s._summ_prompt))
+        s._summ_prompt = s._summ_cached = s._summ_out = 0.0
+
+    def _shrunk(self, prior: float, obs: list[float]) -> float:
+        w = self.cfg.learn_weight
+        return (w * prior + sum(obs)) / (w + len(obs)) if obs else prior
+
+    def Lp(self, s: SessionState) -> float:
+        return self._shrunk(self.cfg.Lp, s.lp_obs) if self.cfg.learn_lp else self.cfg.Lp
+
+    def summary_out(self, s: SessionState) -> float | None:
+        c = self.cfg
+        if c.learn_summary_out and s.so_obs:
+            return self._shrunk(c.summary_out if c.summary_out is not None else c.Lp, s.so_obs)
+        return c.summary_out
+
+    def gamma(self, s: SessionState) -> float:
+        c = self.cfg
+        if c.learn_gamma and s.unc_obs:
+            prior_unc = (c.gamma - 1) / (c.alpha - 1) if c.alpha > 1 else 0.0
+            u = self._shrunk(prior_unc, s.unc_obs)
+            return 1 + (c.alpha - 1) * u
+        return c.gamma
 
     # ------------------------------------------------------------ helpers
     def session(self, key: str) -> SessionState:
@@ -123,8 +202,8 @@ class LimitController:
         if L0 is None:
             return None
         c = self.cfg
-        return Params(L0=L0, Lp=c.Lp, g=s.g.value, alpha=c.alpha, beta=c.beta, phi=c.phi,
-                      m=c.m, gamma=c.gamma, summary_out=c.summary_out, summary_fixed=c.summary_fixed)
+        return Params(L0=L0, Lp=self.Lp(s), g=s.g.value, alpha=c.alpha, beta=c.beta, phi=c.phi,
+                      m=c.m, gamma=self.gamma(s), summary_out=self.summary_out(s), summary_fixed=c.summary_fixed)
 
     def limit(self, s: SessionState) -> tuple[float | None, str]:
         c = self.cfg
@@ -138,7 +217,7 @@ class LimitController:
         if p is None:
             return None, "no_L0"
         L = best_threshold(p)
-        floor = p.L0 + p.Lp + p.g * (c.min_window_turns - 1)
+        floor = p.L0 + self.Lp(s) + p.g * (c.min_window_turns - 1)
         reason = "formula"
         if L < floor:
             L, reason = floor, "floor_min_window"
@@ -178,6 +257,7 @@ class LimitController:
             s.n_compactions += 1
             s.cached_after_compaction = cached or s.cached_after_compaction
             s.pending_compact = False
+            self._flush_compaction_obs(s, prompt, cached)
         elif s.last_main_prompt is not None:
             s.g.add(prompt - s.last_main_prompt)
         s.expect_boundary = False
@@ -189,7 +269,7 @@ class LimitController:
         if limit is not None and not s.pending_compact:
             predicted = prompt + c.lookahead * g_hat
             L0 = self.L0(s) or 0.0
-            if predicted >= limit and prompt > L0 + c.Lp:
+            if predicted >= limit and prompt > L0 + self.Lp(s):
                 compact = True
                 if c.horizon is not None:
                     p = self.params(s)
@@ -200,7 +280,8 @@ class LimitController:
         if compact:
             s.pending_compact = True
         d = Decision(compact_now=compact, limit=limit, g_hat=g_hat, L0=self.L0(s), window_idx=s.window_idx,
-                     turn_idx=s.turn_idx, window_start=window_start, reason=reason)
+                     turn_idx=s.turn_idx, window_start=window_start, reason=reason,
+                     alpha=c.alpha, beta=c.beta, gamma=self.gamma(s), Lp=self.Lp(s), summary_out=self.summary_out(s))
         s.last_decision = d
         s.prompts.append(prompt); s.kinds.append(kind); s.limits.append(limit)
         return d
@@ -210,13 +291,27 @@ class LimitController:
 
 
 # ---------------------------------------------------------------- config from a job file
+def load_prices(name: str, config_dir=None):
+    """Prices row of configs/prices.json (alpha = write/read, beta = output/read)."""
+    import json
+    from pathlib import Path
+
+    from .cost_model import Prices
+
+    config_dir = Path(config_dir) if config_dir else Path(__file__).resolve().parent.parent / "configs"
+    with open(config_dir / "prices.json") as f:
+        e = json.load(f)["models"][name]
+    return Prices(read=e["read"], write=e["write"], output=e["output"], uncached=e.get("uncached"))
+
+
 def config_from_spec(spec: dict | None, config_dir=None) -> ControllerConfig:
     """ControllerConfig from the `optlimit:` block of a job config (or any dict).
 
     `prior` (key of configs/priors.json "harness") fills Lp, L0 (as L0_mode fixed), g_prior,
     m, gamma, phi and summary_out; `prices` (key of configs/prices.json "models") fills
     alpha and beta. Explicit fields override both. Unknown keys raise, so a typo in a yaml
-    does not pass silently.
+    does not pass silently. `prices_reload` is accepted and ignored here (the harbor agent
+    re-reads the prices row when the file changes and calls update_prices()).
     """
     import json
     from dataclasses import fields
@@ -238,11 +333,10 @@ def config_from_spec(spec: dict | None, config_dir=None) -> ControllerConfig:
         if p.get("L0") is not None:
             base.update(L0_mode="fixed", L0_fixed=float(p["L0"]))
     if prices:
-        with open(config_dir / "prices.json") as f:
-            e = json.load(f)["models"][prices]
-        pr = Prices(read=e["read"], write=e["write"], output=e["output"], uncached=e.get("uncached"))
+        pr = load_prices(prices, config_dir)
         base.update(alpha=pr.alpha, beta=pr.beta)
     known = {f.name for f in fields(ControllerConfig)}
+    spec.pop("prices_reload", None)   # handled by the harbor agent (hot reload of the prices row)
     unknown = set(spec) - known
     if unknown:
         raise ValueError(f"optlimit: unknown controller fields {sorted(unknown)}; known: {sorted(known)}")

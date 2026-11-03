@@ -75,3 +75,47 @@ def test_fixed_mode_lookahead():
     ctl.on_prompt("k", "main", 500.0)
     assert not ctl.on_prompt("k", "main", 18500.0).compact_now
     assert ctl.on_prompt("k", "main", 19100.0).compact_now
+
+
+def test_update_prices_moves_the_limit_and_is_recorded():
+    cfg = ControllerConfig(mode="formula", Lp=3203, L0_mode="fixed", L0_fixed=1258, alpha=10, beta=50,
+                           m=2.178, gamma=1.508, summary_out=4242, g_prior=717, g_prior_weight=5)
+    ctl = LimitController(cfg)
+    d1 = ctl.on_prompt("s", "main", 2000.0)
+    assert d1.alpha == 10 and d1.beta == 50
+    ctl.update_prices(25, 100, note="sonnet-5-5 ratios")
+    d2 = ctl.on_prompt("s", "main", 2700.0)
+    assert d2.alpha == 25 and d2.beta == 100
+    # higher write/output premiums make each compaction dearer -> larger window
+    assert d2.limit > d1.limit * 1.2
+    assert ctl.price_updates[-1]["note"] == "sonnet-5-5 ratios"
+    # gamma follows alpha only when learned from an uncached fraction; fixed otherwise
+    assert d2.gamma == 1.508
+
+
+def test_learned_terms_track_observed_compactions():
+    base = dict(mode="formula", Lp=3203, L0_mode="fixed", L0_fixed=1258, alpha=10, beta=50,
+                m=2.178, gamma=1.508, summary_out=4242, g_prior=717, g_prior_weight=5, learn_weight=1.0)
+    fixed = LimitController(ControllerConfig(**base))
+    learn = LimitController(ControllerConfig(**base, learn_lp=True, learn_summary_out=True, learn_gamma=True))
+    for ctl in (fixed, learn):
+        P = 2000.0
+        ctl.on_prompt("s", "main", P)
+        for _ in range(3):
+            # run a window up to the limit, then a compaction whose hand-off is 10K (not 3.2K)
+            for _ in range(200):
+                P += 800
+                d = ctl.on_prompt("s", "main", P)
+                if d.compact_now:
+                    break
+            # summary calls: 2.178 reads of ~P, half of it uncached, 9000 output tokens
+            ctl.note_summary_usage("s", prompt=2.178 * P, cached=0.5 * 2.178 * P, completion=9000)
+            ctl.note_kind("s", "summary")
+            P = 1258 + 10000
+            d = ctl.on_prompt("s", "main", P, cached=1258)
+            assert d.window_start
+    df, dl = fixed.session("s").last_decision, learn.session("s").last_decision
+    assert df.Lp == 3203 and df.summary_out == 4242 and df.gamma == 1.508
+    assert 8000 < dl.Lp < 10000 and 7500 < dl.summary_out < 9000
+    assert abs(dl.gamma - (1 + 9 * ((0.0564 + 3 * 0.5) / 4))) < 0.05   # prior uncached 5.6% w=1, then 3 x 50%
+    assert dl.limit > df.limit * 1.3
