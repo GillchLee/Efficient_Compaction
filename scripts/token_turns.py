@@ -19,6 +19,10 @@ Columns in turns.csv:
   kind              main, or summarization for the summary/questions/answers/short
                     LLM calls made while compacting (see the file column)
 
+submissions.csv  one row per submission (interim verifier run), from the host-only
+                 <trial>/interim_verifier.jsonl Harbor writes: submission number, turn at
+                 which the agent submitted, reward, status (ok / timeout), passed
+
 summary.csv adds, per trial:
   compactions       context summarizations (handoffs) in the main agent
   main_* / summ_*   tokens and cost split between agent turns and compaction calls
@@ -29,6 +33,7 @@ import csv
 import json
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 TURN_FIELDS = [
@@ -74,6 +79,14 @@ SUMMARY_FIELDS = [
     "summ_cache_write",
     "summ_completion_tokens",
     "summ_cost_usd",
+    "submissions",
+    "best_interim_reward",
+    "last_interim_reward",
+]
+
+SUBMISSION_FIELDS = [
+    "trial", "task", "submission", "timestamp", "turn", "reward", "status", "passed",
+    "remaining_sec",
 ]
 
 # Both binary-feedback rejection prompts (harbor/src/harbor/trial/trial.py) say this.
@@ -164,9 +177,36 @@ def _rows_from_file(path: Path, trial: str, task: str, kind: str, state: dict) -
     return rows
 
 
-def collect(job_dir: Path) -> tuple[list[dict], list[dict]]:
+def _submissions(trial_dir: Path, trial: str, task: str, main_rows: list[dict]) -> list[dict]:
+    log = trial_dir / "interim_verifier.jsonl"
+    if not log.exists():
+        return []
+    times = [datetime.fromisoformat(r["timestamp"]) for r in main_rows if r["timestamp"]]
+    rows = []
+    for line in log.read_text().splitlines():
+        if not line.strip():
+            continue
+        rec = json.loads(line)
+        at = datetime.fromisoformat(rec["timestamp"])
+        rows.append({
+            "trial": trial,
+            "task": task,
+            "submission": rec.get("submission"),
+            "timestamp": rec["timestamp"],
+            # Agent turns completed before this verifier run finished.
+            "turn": sum(t <= at for t in times),
+            "reward": rec.get("reward"),
+            "status": rec.get("status"),
+            "passed": rec.get("passed"),
+            "remaining_sec": rec.get("remaining_sec"),
+        })
+    return rows
+
+
+def collect(job_dir: Path) -> tuple[list[dict], list[dict], list[dict]]:
     turns: list[dict] = []
     summaries: list[dict] = []
+    submissions: list[dict] = []
     for agent_dir in sorted(job_dir.glob("*/agent")):
         trial_dir = agent_dir.parent
         trial = trial_dir.name
@@ -185,6 +225,9 @@ def collect(job_dir: Path) -> tuple[list[dict], list[dict]]:
 
         main = [r for r in trial_rows if r["kind"] == "main"]
         summ = [r for r in trial_rows if r["kind"] == "summarization"]
+        subs = _submissions(trial_dir, trial, task, main)
+        submissions += subs
+        sub_rewards = [r["reward"] for r in subs if r["reward"] is not None]
         sum_prompt = sum(r["prompt_tokens"] for r in trial_rows)
         sum_read = sum(r["cache_read"] for r in trial_rows)
         summaries.append(
@@ -213,9 +256,12 @@ def collect(job_dir: Path) -> tuple[list[dict], list[dict]]:
                 "summ_cache_write": sum(r["cache_write"] for r in summ),
                 "summ_completion_tokens": sum(r["completion_tokens"] for r in summ),
                 "summ_cost_usd": round(sum(r["cost_usd"] for r in summ), 4),
+                "submissions": len(subs),
+                "best_interim_reward": max(sub_rewards, default=None),
+                "last_interim_reward": sub_rewards[-1] if sub_rewards else None,
             }
         )
-    return turns, summaries
+    return turns, summaries, submissions
 
 
 def _write(path: Path, fields: list[str], rows: list[dict]) -> None:
@@ -237,9 +283,10 @@ def main() -> int:
     out_dir = args.out_dir or args.job_dir / "token_turns"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    turns, summaries = collect(args.job_dir)
+    turns, summaries, submissions = collect(args.job_dir)
     _write(out_dir / "turns.csv", TURN_FIELDS, turns)
     _write(out_dir / "summary.csv", SUMMARY_FIELDS, summaries)
+    _write(out_dir / "submissions.csv", SUBMISSION_FIELDS, submissions)
 
     print(f"{len(turns)} LLM calls across {len(summaries)} trials -> {out_dir}")
     for s in summaries:
@@ -248,7 +295,8 @@ def main() -> int:
             f"turns={s['turns']} max_prompt={s['max_prompt_tokens']:,} "
             f"cache_read={s['sum_cache_read']:,} cache_write={s['sum_cache_write']:,} "
             f"output={s['sum_completion_tokens']:,} hit={s['cache_hit_ratio']:.1%} "
-            f"${s['cost_usd']} (summ {s['summ_calls']} calls ${s['summ_cost_usd']})"
+            f"${s['cost_usd']} (summ {s['summ_calls']} calls ${s['summ_cost_usd']}) "
+            f"submissions={s['submissions']} best={s['best_interim_reward']}"
         )
     return 0
 

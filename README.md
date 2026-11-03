@@ -10,14 +10,14 @@
 ## 구성
 
 ```
-patches/harbor-token-and-summary-tracking.patch   LHTB에 포함된 Harbor 수정 (4개 파일)
+patches/harbor-token-and-summary-tracking.patch   LHTB에 포함된 Harbor 수정 (5개 파일)
 configs/sweep/luna_ctx{40k,80k,120k,native}.yaml  압축 창 조건별 job 설정
 configs/sweep/luna_ctx80k_rerun_law433.yaml       80k apex-law433 재실행
 configs/smoke/luna_ctx6k_smoke.yaml               6k 창 · 15분 동작 확인용
 configs/examples/*.yaml                           Claude(Anthropic API) 예시 설정
 scripts/run_luna_ctx_sweep.sh                     창 조건 여러 개를 PARALLEL개씩 실행/이어서 실행
 scripts/run_job.sh                                설정 파일 하나로 job 실행/이어서 실행
-scripts/token_turns.py                            턴별 prompt · cache read/write · output · 비용 집계
+scripts/token_turns.py                            턴별 prompt · cache read/write · output · 비용, 제출별 중간 채점 점수 집계
 scripts/sweep_summary.py                          조건별 점수 · 토큰 · 요약 비용 비교표
 scripts/trajectory_issues.py                      검증 거부 · 재제출 · 응답 거부 · 오류 등 행동 지표
 setup.sh                                          작업 환경 재구성
@@ -55,7 +55,7 @@ nohup caffeinate -ims bash scripts/run_job.sh configs/sweep/luna_ctx120k.yaml > 
 
 # 집계
 source .venv/bin/activate
-python scripts/token_turns.py jobs/lhtb-luna-ctx80k          # -> jobs/lhtb-luna-ctx80k/token_turns/{turns,summary}.csv
+python scripts/token_turns.py jobs/lhtb-luna-ctx80k          # -> jobs/lhtb-luna-ctx80k/token_turns/{turns,summary,submissions}.csv
 python scripts/sweep_summary.py jobs/lhtb-luna-ctx80k jobs/lhtb-luna-ctxnative --out jobs/sweep_luna_ctx.csv
 python scripts/trajectory_issues.py jobs/lhtb-luna-ctx80k jobs/lhtb-luna-ctxnative --out jobs/trajectory_issues.csv
 ```
@@ -76,8 +76,9 @@ python scripts/trajectory_issues.py jobs/lhtb-luna-ctx80k jobs/lhtb-luna-ctxnati
 | `models/metric/usage_info.py` | `UsageInfo.cache_creation_tokens` 필드 |
 | `llms/chat.py` | 누적 `total_cache_creation_tokens` |
 | `agents/terminus_2/terminus_2.py` | 턴마다 `metrics.extra.cache_creation_tokens` 기록, 문맥 초과 시의 short summary 호출도 `_run_subagent`로 보내 토큰·비용을 `trajectory.summarization-N-short.json`에 기록 |
+| `trial/trial.py` | 완료 선언(제출)마다 돌리는 중간 채점 결과를 `<trial>/interim_verifier.jsonl`에 기록(제출 번호, 시각, 남은 시간, 점수, 통과 여부). Mac 쪽에만 남고 에이전트에게는 보이지 않으며, 에이전트가 받는 것은 여전히 이유 없는 거부 메시지뿐입니다 |
 
-trajectory 위치: `jobs/<job>/<task>__<id>/agent/trajectory.json`(본 대화), `trajectory.summarization-N-{summary,questions,answers,short}.json`(압축 때의 요약 호출), `verifier/scorecard.json`(채점 상세).
+trajectory 위치: `jobs/<job>/<task>__<id>/agent/trajectory.json`(본 대화), `trajectory.summarization-N-{summary,questions,answers,short}.json`(압축 때의 요약 호출), `interim_verifier.jsonl`(제출별 중간 채점), `verifier/scorecard.json`(최종 채점 상세).
 
 ## 알아둘 점
 
@@ -85,6 +86,7 @@ trajectory 위치: `jobs/<job>/<task>__<id>/agent/trajectory.json`(본 대화), 
 - **잠자기.** 에이전트 루프는 로컬에서 돌기 때문에 실행 중에 컴퓨터가 잠들거나 재시동되면 trial이 끊깁니다. `caffeinate`를 쓰고, macOS 자동 업데이트 설치를 꺼 두세요.
 - **`harbor run -i`.** 태스크 필터 `-i/-x`는 `-p <tasks 경로>` 없이 쓰면 오류가 납니다. 태스크를 고를 때는 설정 파일의 `task_names`를 쓰세요.
 - **업스트림 테스트.** LHTB 7ca0cac의 Harbor에는 원래부터 `tests/unit/agents/terminus_2/test_same_conversation_resume.py`(문법 오류)와 tmux 테스트 5개가 실패합니다. 이 패치와 무관합니다.
+- **터미널 기록 파일 폭주.** 이유 없는 거부를 많이 받으면 에이전트가 채점 정보를 찾으러 `/logs`를 뒤지기도 합니다. 이때 `cat /logs/agent/terminus_2.pane`(지금 터미널을 기록하는 파일)을 실행하면 출력이 같은 파일에 다시 쌓이면서 디스크가 가득 찹니다. 실제로 120k spot-scheduler에서 4GB 디스크가 1분 만에 찼고, Harbor가 실패 처리 중에 멈췄습니다. 조건 간 비교를 위해 하네스는 고치지 않았습니다. 생기면 멈춘 Harbor를 `kill -INT`로 끝내고, 그 trial 폴더를 옮긴 뒤 같은 명령으로 이어서 실행하세요. 켜진 채 남은 샌드박스는 Daytona에서 중지하세요.
 - **비용.** `cost_usd`는 LiteLLM 요금표 기준 추정치입니다.
 
 ## 라이선스
