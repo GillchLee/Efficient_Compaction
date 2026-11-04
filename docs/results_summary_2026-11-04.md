@@ -117,6 +117,24 @@ formula 는 초기 설정(g 관측만, Lp 3.2K 고정 사전값, 학습·바닥 
 - duckdb 의 formula·l80k trial 은 harbor tmux/docker exec 오류("failed to send non-blocking keys: None")로 죽었다(오늘 3회째). 재실행은 사용자 결정.
 - reward 가 L 에 반응하는 곡선이 필요하면 1.0 과제(spot-scheduler, apex-ib244)가 맞다. 2.0 에서 쓰려면 Luna 가 1.0 에 도달하는 과제를 골라야 하는데(seismo, sqlite 는 이미 통과, gdal 은 0.65 천장), 그 외 후보는 HF 리더보드 per-task 표로 확인해야 한다.
 
+## 5c. Mac(daytona) 초기 sweep 편입 — 6과제 80K / 120K / native (`jobs/lhtb-luna-ctx{80k,120k,native}`, 11-01 ~ 11-04)
+
+같은 6과제·3시간·stock terminus-2(litellm 임계값). 환경이 daytona 라 턴당 벽시계 시간이 docker 의 2배(간격 중앙값 14–16 s vs 6–7 s)이므로 $/과제·h 는 docker 조건과 직접 비교하지 않고 $/턴으로 비교한다.
+
+| | M l80k | M l120k | M native |
+|---|---|---|---|
+| reward 평균 | 0.543 (law433 재실행 반영 0.579) | 0.602 | 0.601 |
+| $/턴 | 0.00089 | 0.00107 | 0.00244 |
+| $/과제·h | 0.174 | 0.230 | 0.361 |
+| 턴/h | 197 | 216 | 158 |
+| 압축 / ρ 평균 | 39 / 1.14 | 26 / 0.85 | 0 / – |
+
+$/턴 순서: formula 0.00069 < l60k 0.00080 < M l80k 0.00089 < M l120k 0.00107 < l140k 0.00117 < l160k 0.00129 < M native 0.00244. reward 는 창과 무관(과제별 분산 안).
+
+**턴 수가 조건마다 다른 이유** (턴 간격 회귀, 모든 Luna 1.0 trial): 절편(환경 고정비) docker 4.4–5.0 s vs daytona 10–12 s 가 가장 큰 항; output(추론 포함) 5–6 s/1K 가 토큰 쪽 최대 항이며 중앙값은 구간 무관(330–440)이나 평균은 prompt 가 클수록 증가(docker 427→795, daytona 419→1,807) — 긴 컨텍스트에서 긴 추론 꼬리; prefill 0.01–0.05 s/1K 는 native 에서만 10 s 급; 요약 호출은 벽시계 3–24% 지만 formula 는 본 호출 간격이 가장 짧아 턴/h 최다. R² 0.04–0.24: 간격 분산의 대부분은 명령 실행 시간.
+
+발행: https://claude.ai/artifact/UR5sh14rdFPoWeBYTFUyPj (`bash scripts/make_luna_chart.sh`, 요약표 `docs/luna_sweeps_intro.html`; A·B·B′·M·C 89 trial 의 턴별 그래프).
+
 ## 6. 쓰는 법
 
 ```yaml

@@ -117,7 +117,12 @@ def main() -> int:
     ap.add_argument("--public", type=Path, help="analysis/public_feedback.py output")
     ap.add_argument("--warn", default="", help="note shown at the top of the page")
     ap.add_argument("--tpl", type=Path, default=HERE / "chart.tpl.html")
+    ap.add_argument("--cond", action="append", default=[], metavar="JOB=LABEL",
+                    help="condition label for that job directory name (default: summary.csv condition)")
+    ap.add_argument("--intro", type=Path, help="HTML file inserted above the charts (tables, notes)")
+    ap.add_argument("--title", default="LHTB Turn Cache Profile")
     a = ap.parse_args()
+    cond_of = dict(kv.split("=", 1) for kv in a.cond)
 
     public = json.loads(a.public.read_text()) if a.public and a.public.exists() else {}
     data: list[dict] = []
@@ -127,11 +132,14 @@ def main() -> int:
             print(f"skip {d}: no token_turns/summary.csv (run analysis/token_turns.py first)", file=sys.stderr)
             continue
         jobs.append(d)
-        data += trial_entries(d, public)
+        for e in trial_entries(d, public):
+            if d.name in cond_of:
+                e["cond"] = cond_of[d.name]
+            data.append(e)
     if not data:
         print("no trials", file=sys.stderr)
         return 1
-    stats, _ = prefill_stats.compute(jobs)
+    stats, _ = prefill_stats.compute(jobs, cond_of)
 
     table = json.loads((CONFIG_DIR / "prices.json").read_text())["models"]
     price = {}
@@ -146,7 +154,8 @@ def main() -> int:
         k = (d["model"], d["cond"])
         if k not in seen:
             seen.add(k)
-            conds.append([d["model"], d["cond"], f"{short_model(d['model'])} {d['cond']}"])
+            conds.append([d["model"], d["cond"],
+                          d["cond"] if d["job"] in cond_of else f"{short_model(d['model'])} {d['cond']}"])
     tasks = [[t, t] for t in sorted({d["task"] for d in data})]
 
     html = (a.tpl.read_text()
@@ -155,7 +164,9 @@ def main() -> int:
             .replace("__PRICE__", json.dumps(price))
             .replace("__CONDS__", json.dumps(conds, ensure_ascii=False))
             .replace("__TASKS__", json.dumps(tasks))
-            .replace("__WARN__", json.dumps(a.warn, ensure_ascii=False)))
+            .replace("__WARN__", json.dumps(a.warn, ensure_ascii=False))
+            .replace("__TITLE__", a.title)
+            .replace("__INTRO__", a.intro.read_text() if a.intro else ""))
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text(html)
     print(f"{a.out}: {len(html):,} bytes, {len(data)} trials, {len(conds)} conditions, {len(tasks)} tasks")

@@ -138,11 +138,15 @@ def group(events: list[dict], keyf, title: str, lines: list[str]) -> dict:
     return out
 
 
-def compute(job_dirs: list[Path]) -> tuple[dict, str]:
+def compute(job_dirs: list[Path], cond_of: dict[str, str] | None = None) -> tuple[dict, str]:
+    """cond_of: optional {job dir name: condition label} override (analysis/chart.py --cond)."""
     events: list[dict] = []
     for d in job_dirs:
         if (d / "token_turns" / "turns.csv").exists():
-            events += events_of(d)
+            for e in events_of(d):
+                if cond_of and d.name in cond_of:
+                    e["cond"] = cond_of[d.name]
+                events.append(e)
         else:
             print(f"skip {d}: no token_turns/turns.csv (run analysis/token_turns.py first)", file=sys.stderr)
     lines = ["# Post-compaction prefill (cache write at the first compacted turn)\n", "## Every compaction\n"]
