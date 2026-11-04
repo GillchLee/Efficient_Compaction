@@ -1,80 +1,91 @@
 {
- "_note": "Cost-model parameters per model for terminus-2 (units: tokens). L0 = part of the post-compaction prompt that is still a cache hit, Lp = part written anew (L0 + Lp = prompt right after compaction), g = prompt growth per turn (median), m = full-context reads by the summarization calls, gamma = price multiplier of those reads relative to a cache read, summary_out = their output tokens, phi = Lp slope in L. Entries written by analysis/fit_priors.py; the qwen27b ones are older local vLLM measurements.",
- "harness": {
-  "terminus2-qwen27b-think": {
-   "source": "local TC16/TC72 (Qwen3.8-27B vLLM, thinking on)",
-   "Lp": 8300,
-   "L0": 900,
-   "g": 1394,
-   "m": 2,
-   "gamma": 1.0,
-   "summary_out": 6000,
-   "_detail": "Lp = fixed 0.9K + summary 2.7K + screen 0.6K + questions 0.9K + answers 2.4K; summary and answers calls both read the full context (m=2), the questions call reads ~3K only; summary_out = 2712+883+2384. Locally the cache was mostly cold after compaction (gamma may be ~alpha)."
-  },
-  "terminus2-qwen27b-instant": {
-   "source": "local TI16 (thinking off)",
-   "Lp": 4000,
-   "L0": 900,
-   "g": 1200,
-   "m": 2,
-   "gamma": 1.0,
-   "summary_out": 1000,
-   "_detail": "summary degenerates to JSON action format in 70% of cases; keep thinking on for the 3 summary calls."
-  },
-  "terminus2-sonnet-5-5": {
-   "source": "fit_priors.py over 4 trials, 20 compactions",
-   "Lp": 9365,
-   "L0": 0,
-   "g": 409,
-   "m": 2.143,
-   "gamma": 2.103,
-   "summary_out": 6857,
-   "phi": 0.0,
-   "_detail": "L0 = median cache read at the first compacted turn, Lp = median cache write there (full post-compaction prompt 9369); g median 409 / mean 574 (q25 278, q75 672); L_before median 77370; summarization input 2.143 x L, uncached fraction 0.058; first prompt 1926."
-  },
-  "terminus2-gpt-6-luna": {
-   "source": "fit_priors.py over 9 trials, 45 compactions",
-   "Lp": 3203,
-   "L0": 1258,
-   "g": 717,
-   "m": 2.178,
-   "gamma": 1.508,
-   "summary_out": 4242,
-   "phi": 0.0267,
-   "_detail": "L0 = median cache read at the first compacted turn, Lp = median cache write there (full post-compaction prompt 5694); g median 717 / mean 840 (q25 147, q75 1202); L_before median 40582; summarization input 2.178 x L, uncached fraction 0.056; first prompt 1261."
-  },
-  "terminus2-gpt-6-luna-lp10k": {
-   "source": "projection for handoff summary_words=2600 min_questions=12 answer_words=2000 (not yet measured); other fields from terminus2-gpt-6-luna",
-   "Lp": 10000,
-   "L0": 1258,
-   "g": 717,
-   "m": 2.178,
-   "gamma": 1.508,
-   "summary_out": 8600,
-   "phi": 0.0,
-   "_detail": "Lp = task 1.1-1.7K + screen ~0.6K + template 0.15K + summary ~3.9K + questions ~0.75K + answers ~3K; summary_out = those 7.65K visible tokens + ~1K reasoning. Replace with fit_priors.py output once a run exists."
-  },
-  "terminus2-gpt-6-luna-single": {
-   "source": "projection for handoff mode=single summary_words=800 (not yet measured); g/L0/gamma from terminus2-gpt-6-luna",
-   "Lp": 3400,
-   "L0": 1258,
-   "g": 717,
-   "m": 1.0,
-   "gamma": 1.508,
-   "summary_out": 1600,
-   "phi": 0.0,
-   "_detail": "Lp = task 1.1-1.7K + screen ~0.6K + template 0.2K + summary ~1.2K; summary_out = 1.2K visible + reasoning"
-  },
-  "terminus2-gpt-6-luna-single2k": {
-   "source": "projection for handoff mode=single summary_words=2000 (not yet measured)",
-   "Lp": 5200,
-   "L0": 1258,
-   "g": 717,
-   "m": 1.0,
-   "gamma": 1.508,
-   "summary_out": 3500,
-   "phi": 0.0,
-   "_detail": "as -single with a ~3K-token summary"
+  "_note": "Cost-model parameters per model for terminus-2 (units: tokens). L0 = part of the post-compaction prompt that is still a cache hit, Lp = part written anew (L0 + Lp = prompt right after compaction), g = prompt growth per turn (median), m = full-context reads by the summarization calls, gamma = price multiplier of those reads relative to a cache read, summary_out = their output tokens, phi = Lp slope in L. Entries written by analysis/fit_priors.py; the qwen27b ones are older local vLLM measurements.",
+  "harness": {
+    "terminus2-qwen27b-think": {
+      "source": "local TC16/TC72 (Qwen3.8-27B vLLM, thinking on)",
+      "Lp": 8300,
+      "L0": 900,
+      "g": 1394,
+      "m": 2,
+      "gamma": 1.0,
+      "summary_out": 6000,
+      "_detail": "Lp = fixed 0.9K + summary 2.7K + screen 0.6K + questions 0.9K + answers 2.4K; summary and answers calls both read the full context (m=2), the questions call reads ~3K only; summary_out = 2712+883+2384. Locally the cache was mostly cold after compaction (gamma may be ~alpha)."
+    },
+    "terminus2-qwen27b-instant": {
+      "source": "local TI16 (thinking off)",
+      "Lp": 4000,
+      "L0": 900,
+      "g": 1200,
+      "m": 2,
+      "gamma": 1.0,
+      "summary_out": 1000,
+      "_detail": "summary degenerates to JSON action format in 70% of cases; keep thinking on for the 3 summary calls."
+    },
+    "terminus2-sonnet-5-5": {
+      "source": "fit_priors.py over 4 trials, 20 compactions",
+      "Lp": 9365,
+      "L0": 0,
+      "g": 409,
+      "m": 2.143,
+      "gamma": 2.103,
+      "summary_out": 6857,
+      "phi": 0.0,
+      "_detail": "L0 = median cache read at the first compacted turn, Lp = median cache write there (full post-compaction prompt 9369); g median 409 / mean 574 (q25 278, q75 672); L_before median 77370; summarization input 2.143 x L, uncached fraction 0.058; first prompt 1926."
+    },
+    "terminus2-gpt-6-luna": {
+      "source": "fit_priors.py over 9 trials, 45 compactions",
+      "Lp": 3203,
+      "L0": 1258,
+      "g": 717,
+      "m": 2.178,
+      "gamma": 1.508,
+      "summary_out": 4242,
+      "phi": 0.0267,
+      "_detail": "L0 = median cache read at the first compacted turn, Lp = median cache write there (full post-compaction prompt 5694); g median 717 / mean 840 (q25 147, q75 1202); L_before median 40582; summarization input 2.178 x L, uncached fraction 0.056; first prompt 1261."
+    },
+    "terminus2-gpt-6-luna-lp10k": {
+      "source": "projection for handoff summary_words=2600 min_questions=12 answer_words=2000 (not yet measured); other fields from terminus2-gpt-6-luna",
+      "Lp": 10000,
+      "L0": 1258,
+      "g": 717,
+      "m": 2.178,
+      "gamma": 1.508,
+      "summary_out": 8600,
+      "phi": 0.0,
+      "_detail": "Lp = task 1.1-1.7K + screen ~0.6K + template 0.15K + summary ~3.9K + questions ~0.75K + answers ~3K; summary_out = those 7.65K visible tokens + ~1K reasoning. Replace with fit_priors.py output once a run exists."
+    },
+    "terminus2-gpt-6-luna-single": {
+      "source": "fit_priors.py over jobs/luna10c_f_single (handoff mode=single summary_words=800, 3 trials, 159 compactions, 2026-11-04)",
+      "Lp": 4066,
+      "L0": 2285,
+      "g": 1210,
+      "m": 1.101,
+      "gamma": 1.814,
+      "summary_out": 2144,
+      "phi": 0.13,
+      "_detail": "was a projection (Lp 3400, O_s 1600); measured Lp = 1146 + 0.13 L, uncached share of the summary call 9%. Online learned Lp 3.3-4.5K, O_s 1.8-2.2K, gamma 1.75-1.85; L* 18-26K, K 13-18."
+    },
+    "terminus2-gpt-6-luna-single2k": {
+      "source": "fit_priors.py over jobs/luna10c_f_single2k (handoff mode=single summary_words=2000, 3 trials, 110 compactions, 2026-11-04)",
+      "Lp": 5886,
+      "L0": 1997,
+      "g": 1220,
+      "m": 1.074,
+      "gamma": 1.621,
+      "summary_out": 3930,
+      "phi": 0.14,
+      "_detail": "was a projection (Lp 5200, O_s 3500); measured Lp = 2030 + 0.14 L. Online learned Lp 5.4-6.9K, O_s 2.9-4.6K, gamma 1.57-1.65; L* 25-37K, K 18-20. Did not lower re-acquisition vs -single (rho 1.47/1.38/0.01 vs 0.72/1.62/0.62) and cost 7% more per task-hour."
+    },
+    "terminus2-gpt-6-luna-1.0": {
+      "source": "fit_priors.py over jobs/luna10c_f_stock (LHTB 1.0 spot-scheduler/apex-ib244/apex-law433, 3 trials, 93 compactions, 2026-11-04)",
+      "Lp": 5252,
+      "L0": 2281,
+      "g": 1275,
+      "m": 2.341,
+      "gamma": 2.037,
+      "summary_out": 3943,
+      "phi": 0.12,
+      "_detail": "stock 3-call hand-off on the LHTB 1.0 tasks: g is ~1.8x the 2.0-task fit (terminus2-gpt-6-luna) and Lp/O_s ~1.6x; Lp = 1571 + 0.12 L (phi 0.12). Online learned values during the run: Lp 4.3-6.0K, O_s 3.8-5.3K, gamma 1.97-2.06. Use with reacq_turns 1.4 (docs/floor_and_handoff_design.md)."
+    }
   }
- }
 }

@@ -136,8 +136,9 @@ L\* = L0 + Lp − g + √(2gC), C = (α−1)(Lp−g) + mγ(L0+Lp−g) + β·O_s 
 | `learn_lp: true` | Lp 를 창 시작의 prompt − cached 관측으로 갱신(사전값 가중 `learn_weight` 회) |
 | `learn_summary_out: true` | O_s 를 요약 호출들의 completion 합으로 갱신 |
 | `learn_gamma: true` | γ = 1 + (α−1)·u, u 는 요약 호출 입력의 cache miss 비율 관측 |
+| `reacq_turns: ρ`, `reacq_eps: ε` | 창 하한 K_min = ρ/ε, L_min = L0 + Lp + g(K_min − 1) (`floor_min_window`); ρ 는 `analysis/reacquisition.py` 의 압축당 재획득 턴(Luna 1.4). C 에 ρ·f(L\*) 를 더한다 |
 
-분석: `analysis/price_sensitivity.py --prior <prior>` 가 공개 가격표별 L\*, α×β 격자, 고정 창의 후회, 탄력성을 낸다(`docs/price_sensitivity_{luna,sonnet}.md`). `analysis/replay.py --price-shift TURN:ROW` 는 궤적 중간의 가격 변경을 재생한다. 배경·문헌·실험 계획은 `docs/adaptive_limit_plan.md`.
+분석: `analysis/price_sensitivity.py --prior <prior>` 가 공개 가격표별 L\*, α×β 격자, 고정 창의 후회, 탄력성을 낸다(`docs/price_sensitivity_{luna,sonnet}.md`). `analysis/replay.py --price-shift TURN:ROW` 는 궤적 중간의 가격 변경을 재생한다. 배경·문헌·실험 계획은 `docs/adaptive_limit_plan.md`. 창 하한(재획득 문턱 ≈ 23K, K ≥ 14)과 손 넘김 크기(Lp 4–7K 유지, 3회 호출 vs 1회 호출)의 실험 결론은 `docs/floor_and_handoff_design.md` §6 (7개 조건 × 3과제, 2026-11-04).
 
 ## 실험 설계
 

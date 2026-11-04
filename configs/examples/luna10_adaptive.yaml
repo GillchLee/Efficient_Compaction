@@ -31,6 +31,8 @@ agents:
       learn_summary_out: true
       learn_gamma: true
       prices_reload: true
+      reacq_turns: 1.4     # measured re-acquisition turns per compaction (docs/floor_and_handoff_design.md)
+      reacq_eps: 0.1       # floor: K >= reacq_turns / reacq_eps -> L_min ~ 23K for Luna
 datasets:
 - path: ./LHTB/tasks
   task_names:
