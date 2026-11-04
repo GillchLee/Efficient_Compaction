@@ -76,6 +76,23 @@ formula 는 초기 설정(g 관측만, Lp 3.2K 고정 사전값, 학습·바닥 
 - investment-banking formula trial 은 창과 무관하게 루프에 빠진 궤적(기저 반복률 0.81 vs 0.63–0.71)이지만, g 2.1K 로 가장 큰 과제에서 formula 가 고른 K 12 는 K_min 14 **아래** 다. 바닥 규칙이 있었다면 34K → 40K. trial 1개라 원인 분리는 안 된다.
 - 2048·chess-mate 는 게임 루프라 어느 조건에서도 제출이 거의 없고, 반복률 지표도 무의미.
 
+## 4b. 실험 B′ — 같은 6과제·4조건, 손 넘김 10K (`jobs/luna10_lp10k_*`, 11-04 12:41 – 11-05 00:50)
+
+`--handoff summary_words=2600 min_questions=12 answer_words=2000` (3회 호출 유지). 실측 Lp 7.9–9.2K (stock 5.1–6.4K), O_s 8.5K (stock 3.9K). 자세한 표는 `floor_and_handoff_design.md` §5.7.
+
+| | l60k | l140k | l160k | formula |
+|---|---|---|---|---|
+| reward 평균 (stock → lp10k) | 0.620 → 0.681 | 0.541 → 0.610 | 0.613 → 0.720 | 0.514 → 0.593 |
+| $/과제·h | 0.316 → 0.323 | 0.417 → 0.418 | 0.440 → 0.518 | 0.285 → 0.272 |
+| $/턴 | 0.00080 → 0.00084 | 0.00117 → 0.00119 | 0.00129 → 0.00120 | 0.00069 → 0.00083 |
+| ρ (과제 평균) | 0.85 → 0.85 | 0.69 → 1.06 | 0.70 → 1.03 | 0.43 → 0.80 |
+| 압축 | 118 → 96 | 37 → 34 | 29 → 20 | 288 → 152 |
+
+- ρ 는 줄지 않았다(22쌍 중 낮아진 쌍 8, 높아진 쌍 13). single2k(§3) 와 합치면 **손 넘김을 어느 방향으로 바꿔도 ρ 는 그대로이고 비용만 움직인다** — Lp 는 관측값을 쓰고 L\* 로 정하는 2절 규칙 그대로.
+- 턴당 비용 +2…+20% (모델 예측 +25%, formula 실측 +20%). 과제·시간당은 ±5% 안.
+- reward 평균이 높아 보이는 것은 사망 trial 과 1.0 통과 3회(ib244 ×2, investment-banking ×1; 모두 140K·160K) 때문이고, 과제별로는 체계적 차이가 없다(2048 은 4조건 모두 lp10k 가 낮다). stock 은 41 trial 에서 1.0 이 0회라 신호이긴 하나(단측 p ≈ 0.04) trial 1개씩이라 반복 전에는 가설.
+- 사전 `terminus2-gpt-6-luna-lp10k` 를 실측값으로 교체(g 484, Lp 7,959, O_s 8,536, m 2.29, γ 1.75).
+
 ## 5. 이전 결과 (LHTB 2.0, gdal/sqlite/seismo)
 
 - formula(g 관측) gdal: L\* ≈ 26K, 48회 압축, 0.00070 $/턴 vs l40k 0.00079, l120k 0.00166, native 0.00601; reward 동일(0.65 = 모든 모델이 못 넘는 숨은 검사 `nodata_bucket`).
@@ -120,9 +137,10 @@ handoff: {mode: single, summary_words: 800}   # 선택: 1회 호출 손 넘김 (
 
 ## 7. 남은 것
 
-- lp10k(Lp ≈ 10K, 3회 호출) 6과제 4조건 실행 중(12:41 시작, ~12시간; l60k·l140k 완료, l160k 진행 중).
+- lp10k 는 끝났다(§4b). 남은 질문: lp10k 의 1.0 통과 3회(140K·160K 에서만)가 재현되는지 — ib244·investment-banking 을 stock / lp10k × 160K 로 2–3회씩 반복하면 판가름 난다(사용자 결정).
+- `-lp10k` 실측 사전 + learn_* + 바닥으로 formula 를 돌린 적은 없다(지금까지의 lp10k formula 는 투영 사전·g 관측만). 비용 예측상 stock 보다 턴당 +25% 라 우선순위는 낮다.
 - LHTB 2.0 duckdb formula/l80k trial(tmux 오류로 사망) 재실행 여부(사용자 결정).
-- formula 미실행 law433 trial, 루프 궤적 investment-banking trial 재실행 여부(사용자 결정).
+- 사망 trial 재실행 여부(사용자 결정): formula law433·investment-banking(루프), lp10k_l60k investment-banking(tmux), lp10k_l160k law433(docker compose), luna20 formula/l80k duckdb(tmux).
 - ρ 의 온라인 추정(에이전트가 자기 명령 이력의 반복률을 세어 K_min 을 갱신).
 - β 가 작은 가격(GLM 류)에서 바닥이 실제로 L 을 올리는지 실험; OpenAI cache-write 과금 조건 확인(prices.json write 0.1 vs 공개표 0.125/0.25).
 - trial 1개씩이라 reward 비교는 분산 안: 결론은 비용·ρ 에서 나왔고, reward 는 "나빠지지 않음" 까지만 말할 수 있다.

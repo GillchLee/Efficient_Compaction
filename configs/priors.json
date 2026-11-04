@@ -44,15 +44,15 @@
       "_detail": "L0 = median cache read at the first compacted turn, Lp = median cache write there (full post-compaction prompt 5694); g median 717 / mean 840 (q25 147, q75 1202); L_before median 40582; summarization input 2.178 x L, uncached fraction 0.056; first prompt 1261."
     },
     "terminus2-gpt-6-luna-lp10k": {
-      "source": "projection for handoff summary_words=2600 min_questions=12 answer_words=2000 (not yet measured); other fields from terminus2-gpt-6-luna",
-      "Lp": 10000,
-      "L0": 1258,
-      "g": 717,
-      "m": 2.178,
-      "gamma": 1.508,
-      "summary_out": 8600,
-      "phi": 0.0,
-      "_detail": "Lp = task 1.1-1.7K + screen ~0.6K + template 0.15K + summary ~3.9K + questions ~0.75K + answers ~3K; summary_out = those 7.65K visible tokens + ~1K reasoning. Replace with fit_priors.py output once a run exists."
+      "source": "fit_priors.py over jobs/luna10_lp10k_{l60k,l140k,l160k,formula_nog} (handoff summary_words=2600 min_questions=12 answer_words=2000; 6 LHTB 1.0 tasks, 23 trials, 302 compactions, 2026-11-05)",
+      "Lp": 7959,
+      "L0": 2282,
+      "g": 484,
+      "m": 2.293,
+      "gamma": 1.748,
+      "summary_out": 8536,
+      "phi": 0.014,
+      "_detail": "L0 = median cache read at the first compacted turn, Lp = median cache write there (full post-compaction prompt 10310); g median 484 / mean 812 (q25 321, q75 1066); L_before median 59440; summarization input 2.293 x L, uncached fraction 0.083; first prompt 2040."
     },
     "terminus2-gpt-6-luna-single": {
       "source": "fit_priors.py over jobs/luna10c_f_single (handoff mode=single summary_words=800, 3 trials, 159 compactions, 2026-11-04)",
