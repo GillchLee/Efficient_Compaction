@@ -85,3 +85,7 @@ GPT-6 Luna, LHTB 2.0 3과제, 3시간, docker. Lp/L0/m/γ 는 `terminus2-gpt-6-l
 | seismo | formula | 1.0 | passed 2분 | 9 | 0 | 0.007 | 0.00079 |
 
 같은 궤적 리플레이(`analysis/replay.py jobs/luna_formula_nog --set g_prior_weight=0`): gdal formula 0.00065 $/턴(실측 0.00066) vs fixed 40K 0.00069, fixed 120K 0.00104 — 동적이 고정 40K 보다 턴당 약 6% 싸고, 실측도 이전 l40k 실행(0.00079) 보다 낮음. 압축 48회에도 reward 는 0.65 로 다른 조건과 같은 수준(gdal 은 어느 조건에서도 timeout).
+
+## Luna LHTB 1.0 6과제 sweep — `jobs/luna10_{l60k,l140k,l160k,formula_nog}` (2026-11-04 00:13 ~ 12:41)
+
+3시간·6과제·동시 6. 과제·시간당 비용 l60k 0.317 / l140k 0.417 / l160k 0.441 / **formula 0.285** ($/턴 0.00080 / 0.00117 / 0.00129 / 0.00069). reward 는 ib244·spot·chess·2048 에서 같거나 formula 가 높고, investment-banking 만 formula 가 제출 없음(루프 궤적, K 12 < K_min 14), law433 formula trial 은 docker pull 실패로 미실행. 상세와 창 하한·손 넘김 실험(7조건 × 3과제)은 `docs/floor_and_handoff_design.md` §5–6.
