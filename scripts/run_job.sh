@@ -54,7 +54,14 @@ PANE_MAX_MB=${PANE_MAX_MB:-512}
   while sleep 60; do
     find "$JOB_DIR" -name terminus_2.pane -size +"${PANE_MAX_MB}M" -print 2>/dev/null | while read -r f; do
       echo "$(date '+%F %T') trimming $f ($(du -m "$f" | cut -f1) MB)" >>"$LOG"
-      truncate -s "${PANE_MAX_MB}M" "$f"
+      if ! truncate -s "${PANE_MAX_MB}M" "$f" 2>/dev/null; then
+        # tmux creates the file as root inside the container (bind mount /logs/agent), so the
+        # host user cannot truncate it: do it inside the trial's compose container instead.
+        trial=$(basename "$(dirname "$(dirname "$f")")")
+        cname="$(printf '%s' "$trial" | tr '[:upper:]' '[:lower:]')-main-1"
+        docker exec "$cname" truncate -s "${PANE_MAX_MB}M" /logs/agent/terminus_2.pane >>"$LOG" 2>&1 \
+          || echo "$(date '+%F %T') trim failed for $f (container $cname)" >>"$LOG"
+      fi
     done
   done
 ) &
