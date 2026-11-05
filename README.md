@@ -20,7 +20,7 @@ patches/                      Harbor 패치, 번호 순서로 적용 (아래 표
   03-interim-verifier-log.patch
                               제출별 중간 채점 결과를 interim_verifier.jsonl 에 기록
   04-verifier-feedback-option.patch
-                              HB_VERIFIER_FEEDBACK=false 옵션 (채점 결과를 에이전트에 숨김)
+                              HB_VERIFIER_FEEDBACK=false|score 옵션 (채점 결과를 숨기거나 점수를 알림)
 configs/
   make_config.py              모델·압축 조건·환경(docker/daytona)·과제·시간·실행 옵션을 받아 job yaml 생성
   sweep/ smoke/ examples/     생성된(또는 손으로 쓴) job 설정
@@ -165,7 +165,7 @@ trial 루프 옵션은 환경변수(`HB_*`)인데, `make_config.py` 가 yaml 머
 
 | 옵션 | 환경변수 | 기본 | 효과 |
 |---|---|---|---|
-| `--verifier-feedback false` | `HB_VERIFIER_FEEDBACK` | true | 제출마다 숨은 채점은 그대로 돌고 `interim_verifier.jsonl` 에 남지만, 에이전트에게는 "거부" 대신 결과를 알리지 않는 중립 이어가기 메시지를 줍니다 (패치 04). 채점 결과 전달이 시간축 정확도에 주는 영향을 보는 스위치 |
+| `--verifier-feedback false\|score` | `HB_VERIFIER_FEEDBACK` | true | 제출마다 숨은 채점은 그대로 돌고 `interim_verifier.jsonl` 에 남습니다 (패치 04). `false`: 에이전트에게 "거부" 대신 결과를 알리지 않는 중립 이어가기 메시지. `score`: 거부 메시지에 채점 점수(0~1)를 함께 알림. 채점 결과 전달이 시간축 정확도에 주는 영향을 보는 스위치 |
 | `--continue-mode phases` | `HB_CONTINUE_MODE` | same_conversation | 거부 때마다 새 대화로 시작하는 리더보드 방식 |
 | (직접) `HB_PROCESS_REWARD=1` | `HB_PROCESS_REWARD*` | off | LHTB 의 활동 시간 기준 체크포인트. 에이전트에 시간 메시지가 들어가고 docker 에선 거부되므로 별도 조건으로만 |
 

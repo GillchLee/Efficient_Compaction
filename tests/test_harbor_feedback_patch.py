@@ -51,13 +51,27 @@ def _make_trial(tmp_path, monkeypatch, feedback: str):
     return t, prompts
 
 
-@pytest.mark.parametrize("feedback,needle,other", [
-    ("true", "did not pass verification", "has been recorded"),
-    ("false", "has been recorded", "did not pass verification"),
+@pytest.mark.parametrize("feedback,needle,other,mode", [
+    ("true", "did not pass verification", "has been recorded", "binary"),
+    ("false", "has been recorded", "did not pass verification", "none"),
+    ("score", "Verifier score for this submission: 0.500", "has been recorded", "score"),
 ])
-def test_continuation_turn_follows_feedback_switch(tmp_path, monkeypatch, feedback, needle, other):
+def test_continuation_turn_follows_feedback_switch(tmp_path, monkeypatch, feedback, needle, other, mode):
     t, prompts = _make_trial(tmp_path, monkeypatch, feedback)
     asyncio.run(t._execute_agent())
     assert len(prompts) == 1 and needle in prompts[0] and other not in prompts[0]
+    if mode != "score":
+        assert "Verifier score" not in prompts[0]
     rec = json.loads((tmp_path / "interim_verifier.jsonl").read_text().splitlines()[0])
-    assert rec["reward"] == 0.5 and rec["feedback"] == ("binary" if feedback == "true" else "none")
+    assert rec["reward"] == 0.5 and rec["feedback"] == mode
+
+
+def test_score_mode_phase_instruction_and_timeout(monkeypatch):
+    monkeypatch.setenv("HB_VERIFIER_FEEDBACK", "score")
+    from types import SimpleNamespace as NS
+    phase = trial_mod._rejection_turn(same_conversation=False, base_instruction="base", phase=2,
+                                      remaining_sec=100, result=NS(rewards={"reward": 0.25}))
+    assert phase.startswith("base") and "0.250" in phase and "VERIFICATION FAILED" in phase
+    timeout = trial_mod._rejection_turn(same_conversation=True, base_instruction="base", phase=3,
+                                        remaining_sec=50, result=None)
+    assert "score is unavailable" in timeout and "did not pass verification" in timeout

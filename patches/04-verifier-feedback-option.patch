@@ -1,18 +1,89 @@
+diff --git a/harbor/src/harbor/trial/trial.py b/harbor/src/harbor/trial/trial.py
+index cbbefdb..54dd869 100644
 --- a/harbor/src/harbor/trial/trial.py
 +++ b/harbor/src/harbor/trial/trial.py
-@@ -297,6 +297,47 @@
+@@ -297,6 +297,116 @@ def _format_same_conversation_rejection(*, phase: int, remaining_sec: int) -> st
      )
  
  
-+def _verifier_feedback_enabled() -> bool:
-+    """HB_VERIFIER_FEEDBACK=false withholds the interim verifier outcome from the agent.
++def _verifier_feedback_mode() -> str:
++    """HB_VERIFIER_FEEDBACK: what the agent learns about each interim verification.
 +
-+    The verifier still runs on every submission and is recorded in
-+    interim_verifier.jsonl; the agent is resumed with a neutral continuation turn
-+    instead of a rejection. Default (unset / true): stock behaviour.
++    "binary" (default, unset / true): stock rejection turn, pass/fail only.
++    "none"   (false / 0 / no / off): neutral continuation, outcome withheld.
++    "score": the rejection turn also states the verifier's reward (0..1).
++    The verifier runs and is recorded in interim_verifier.jsonl in every mode.
 +    """
 +    value = os.environ.get("HB_VERIFIER_FEEDBACK", "true").strip().lower()
-+    return value not in {"0", "false", "no", "off"}
++    if value in {"0", "false", "no", "off", "none"}:
++        return "none"
++    if value == "score":
++        return "score"
++    return "binary"
++
++
++def _verifier_score(result) -> float | None:
++    rewards = getattr(result, "rewards", None) if result is not None else None
++    value = (rewards or {}).get("reward")
++    try:
++        return None if value is None else float(value)
++    except (TypeError, ValueError):
++        return None
++
++
++def _score_note(score: float | None) -> str:
++    if score is None:
++        return "The verifier score is unavailable for this submission."
++    return (
++        f"Verifier score for this submission: {score:.3f} (1.000 = fully passing). "
++        "No other verifier details are available."
++    )
++
++
++def _format_score_rejection(*, phase: int, remaining_sec: int, score: float | None) -> str:
++    """Same-conversation rejection that discloses the verifier reward."""
++    return (
++        "Your submitted solution did not pass verification. "
++        f"{_score_note(score)} Continue working from the current terminal and "
++        "conversation state. Re-read the original requirements, inspect your "
++        "implementation, and run your own focused checks before submitting again. "
++        f"This is continuation {phase}; approximately {remaining_sec} seconds remain."
++    )
++
++
++def _rejection_turn(
++    *,
++    same_conversation: bool,
++    base_instruction: str,
++    phase: int,
++    remaining_sec: int,
++    result,
++    phase_feedback: str | None = None,
++) -> str:
++    """Continuation prompt after a failed (or timed-out) interim verification."""
++    mode = _verifier_feedback_mode()
++    if mode == "none":
++        if same_conversation:
++            return _format_neutral_continue(phase=phase, remaining_sec=remaining_sec)
++        return _format_neutral_continue_instruction(
++            base_instruction, phase=phase, remaining_sec=remaining_sec
++        )
++    if mode == "score":
++        score = _verifier_score(result)
++        if same_conversation:
++            return _format_score_rejection(
++                phase=phase, remaining_sec=remaining_sec, score=score
++            )
++        return _format_continue_instruction(
++            base_instruction, phase=phase, remaining_sec=remaining_sec,
++            feedback=_score_note(score),
++        )
++    if same_conversation:
++        return _format_same_conversation_rejection(phase=phase, remaining_sec=remaining_sec)
++    return _format_continue_instruction(
++        base_instruction, phase=phase, remaining_sec=remaining_sec,
++        feedback=phase_feedback if phase_feedback is not None else "",
++    )
 +
 +
 +def _format_neutral_continue(*, phase: int, remaining_sec: int) -> str:
@@ -48,66 +119,90 @@
  def _format_process_reward_continue(*, active_sec: float, remaining_sec: float) -> str:
      """Resume after a hidden timed checkpoint without disclosing its result."""
      return (
-@@ -603,6 +644,7 @@
+@@ -603,6 +713,7 @@ class Trial:
              "reward": (rewards or {}).get("reward"),
              "rewards": rewards,
              "passed": _verifier_passed(result),
-+            "feedback": "binary" if _verifier_feedback_enabled() else "none",
++            "feedback": _verifier_feedback_mode(),
          }
          try:
              path = self._trial_paths.trial_dir / "interim_verifier.jsonl"
-@@ -1083,7 +1125,11 @@
+@@ -1083,9 +1194,12 @@ class Trial:
                          remaining = remaining_agent_sec() or 0
                          if reason == "confirmed_task_complete":
                              phase += 1
 -                            instruction = _format_same_conversation_rejection(
-+                            instruction = (
-+                                _format_same_conversation_rejection
-+                                if _verifier_feedback_enabled()
-+                                else _format_neutral_continue
-+                            )(
++                            instruction = _rejection_turn(
++                                same_conversation=True,
++                                base_instruction=base_instruction,
                                  phase=phase,
                                  remaining_sec=max(0, int(remaining)),
++                                result=checkpoint_result,
                              )
-@@ -1127,7 +1173,19 @@
+                         else:
+                             instruction = _format_process_reward_continue(
+@@ -1127,21 +1241,17 @@ class Trial:
                          submission=phase + 1, remaining_sec=remaining, result=None
                      )
                      phase += 1
 -                    if same_conversation:
-+                    if not _verifier_feedback_enabled():
-+                        instruction = (
-+                            _format_neutral_continue(
-+                                phase=phase, remaining_sec=max(0, int(remaining))
-+                            )
-+                            if same_conversation
-+                            else _format_neutral_continue_instruction(
-+                                base_instruction,
-+                                phase=phase,
-+                                remaining_sec=max(0, int(remaining)),
-+                            )
-+                        )
-+                    elif same_conversation:
-                         instruction = _format_same_conversation_rejection(
-                             phase=phase,
-                             remaining_sec=max(0, int(remaining)),
-@@ -1160,7 +1218,19 @@
+-                        instruction = _format_same_conversation_rejection(
+-                            phase=phase,
+-                            remaining_sec=max(0, int(remaining)),
+-                        )
+-                    else:
+-                        instruction = _format_continue_instruction(
+-                            base_instruction,
+-                            phase=phase,
+-                            remaining_sec=max(0, int(remaining)),
+-                            feedback=(
+-                                "Interim verifier timed out. Keep working on the "
+-                                "migration."
+-                            ),
+-                        )
++                    instruction = _rejection_turn(
++                        same_conversation=same_conversation,
++                        base_instruction=base_instruction,
++                        phase=phase,
++                        remaining_sec=max(0, int(remaining)),
++                        result=None,
++                        phase_feedback=(
++                            "Interim verifier timed out. Keep working on the "
++                            "migration."
++                        ),
++                    )
+                     continue
+                 finally:
+                     self._environment.default_user = prior_user
+@@ -1160,19 +1270,18 @@ class Trial:
                      break
  
                  phase += 1
 -                if same_conversation:
-+                if not _verifier_feedback_enabled():
-+                    instruction = (
-+                        _format_neutral_continue(
-+                            phase=phase, remaining_sec=max(0, int(remaining))
-+                        )
-+                        if same_conversation
-+                        else _format_neutral_continue_instruction(
-+                            base_instruction,
-+                            phase=phase,
-+                            remaining_sec=max(0, int(remaining)),
-+                        )
-+                    )
-+                elif same_conversation:
-                     instruction = _format_same_conversation_rejection(
-                         phase=phase,
-                         remaining_sec=max(0, int(remaining)),
+-                    instruction = _format_same_conversation_rejection(
+-                        phase=phase,
+-                        remaining_sec=max(0, int(remaining)),
+-                    )
+-                else:
+-                    feedback = _read_verifier_feedback(self._trial_paths.verifier_dir)
+-                    instruction = _format_continue_instruction(
+-                        base_instruction,
+-                        phase=phase,
+-                        remaining_sec=max(0, int(remaining)),
+-                        feedback=feedback,
+-                    )
++                instruction = _rejection_turn(
++                    same_conversation=same_conversation,
++                    base_instruction=base_instruction,
++                    phase=phase,
++                    remaining_sec=max(0, int(remaining)),
++                    result=interim,
++                    phase_feedback=(
++                        None
++                        if same_conversation or _verifier_feedback_mode() != "binary"
++                        else _read_verifier_feedback(self._trial_paths.verifier_dir)
++                    ),
++                )
+                 self._logger.info(
+                     "continue_until_timeout: verification failed at phase %s; "
+                     "resuming agent (%.0fs remaining, same_conversation=%s)",

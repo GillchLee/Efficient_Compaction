@@ -30,7 +30,7 @@ Local / self-hosted model (vLLM OpenAI-compatible server):
   --prices vllm-...  a row of configs/prices.json in time units (scripts/measure_vllm_prices.py)
 
 Trial-loop options (recorded as `# env:` lines in the yaml; scripts/run_job.sh exports them):
-  --verifier-feedback false
+  --verifier-feedback false|score
                      HB_VERIFIER_FEEDBACK=false: the interim verifier still runs on every
                      submission (interim_verifier.jsonl) but the agent is resumed with a neutral
                      continuation instead of the binary rejection (patch 04). Default true.
@@ -95,8 +95,9 @@ def main() -> int:
                     help="model context length; required for hosted_vllm/ (Harbor model_info)")
     ap.add_argument("--model-info", action="append", default=[], metavar="KEY=VALUE",
                     help="extra/override Harbor model_info fields (input_cost_per_token, ...)")
-    ap.add_argument("--verifier-feedback", choices=["true", "false"],
-                    help="HB_VERIFIER_FEEDBACK (default true: binary rejection after a failed submission)")
+    ap.add_argument("--verifier-feedback", choices=["true", "false", "score"],
+                    help="HB_VERIFIER_FEEDBACK (default true: binary rejection; false: outcome withheld; "
+                         "score: rejection states the verifier reward)")
     ap.add_argument("--continue-mode", choices=["same_conversation", "phases"],
                     help="HB_CONTINUE_MODE (default same_conversation)")
     ap.add_argument("--job-name")
