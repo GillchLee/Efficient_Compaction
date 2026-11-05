@@ -244,6 +244,7 @@ trajectory 위치: `jobs/<job>/<task>__<id>/agent/trajectory.json`(본 대화), 
 ## 알아둘 점
 
 - **Daytona 메모리 한도.** 기본 등급은 계정 전체 동시 메모리가 10GiB입니다. vector-db, duckdb는 각각 8GB라 동시에 두 개를 띄울 수 없으니 `--concurrent 1`, `PARALLEL=1`로 실행하세요.
+- **호스트 메모리.** Harbor 는 과제 컨테이너를 task.toml 의 `memory_mb`(대개 4 GB, 최대 8 GB)로 제한하지만 호스트에 그만큼 비어 있어야 합니다. `run_job.sh` 는 시작 전에 `n_concurrent_trials × 가장 큰 memory_mb + HB_MEM_MARGIN_MB(2048)` 가 MemAvailable 보다 작은지 확인하고, 모자라면 1분마다 다시 재며 기다립니다(`HB_MEM_WAIT_SEC`, 기본 24 h; `HB_MEM_CHECK=0` 으로 끔). 공유 호스트에서는 `--concurrent` 를 낮게 잡으세요.
 - **Docker 호스트.** 에이전트 루프는 로컬에서 돌므로 셸이 죽으면 trial 이 끊깁니다. `setsid nohup` 으로 띄우고, 같은 명령으로 이어서 실행하세요. Docker 의 기본 주소 풀은 네트워크 약 30개까지라 오래된 harbor 네트워크를 지워야 할 때가 있습니다.
 - **`harbor run -i`.** 태스크 필터 `-i/-x`는 `-p <tasks 경로>` 없이 쓰면 오류가 납니다. 태스크를 고를 때는 설정 파일의 `task_names`(`make_config.py --tasks`)를 쓰세요.
 - **업스트림 테스트.** LHTB 7ca0cac의 Harbor에는 원래부터 `tests/unit/agents/terminus_2/test_same_conversation_resume.py`(문법 오류)와 tmux 테스트 5개가 실패합니다. 이 패치와 무관합니다.

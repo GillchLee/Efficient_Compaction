@@ -59,6 +59,52 @@ for kv in $(sed -n 's/^# env: *//p' "$CONFIG"); do
 done
 
 mkdir -p jobs/logs
+
+# Host memory guard. Harbor caps every task container at task.toml memory_mb (compose
+# deploy.resources.limits), so a trial cannot take more than that, but the host must still
+# have it free or the kernel OOM killer picks a victim. Need = n_concurrent_trials x the
+# largest memory_mb among the selected tasks + HB_MEM_MARGIN_MB for harbor/verifier.
+# HB_MEM_CHECK=0 skips it; HB_MEM_WAIT_SEC=0 fails instead of waiting (default: wait 24 h).
+if [[ "${HB_MEM_CHECK:-1}" != 0 ]]; then
+  NEED_MB=$(python3 - "$CONFIG" <<'PY'
+import re, sys, pathlib
+try:
+    import tomllib
+except ImportError:
+    tomllib = None
+import yaml
+cfg = yaml.safe_load(open(sys.argv[1]))
+conc = int(cfg.get("n_concurrent_trials", 1) or 1)
+mems = []
+for ds in cfg.get("datasets", []):
+    root = pathlib.Path(ds.get("path", "."))
+    names = ds.get("task_names") or [d.name for d in root.iterdir() if (d / "task.toml").exists()]
+    for n in names:
+        t = root / n / "task.toml"
+        if not t.exists():
+            continue
+        txt = t.read_text()
+        m = re.search(r"^memory_mb\s*=\s*(\d+)", txt, re.M)
+        mems.append(int(m.group(1)) if m else 4096)
+print(min(conc, max(1, len(mems))) * (max(mems) if mems else 4096))
+PY
+  )
+  NEED_MB=$(( NEED_MB + ${HB_MEM_MARGIN_MB:-2048} ))
+  avail_mb() { awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo; }
+  waited=0
+  while (( $(avail_mb) < NEED_MB )); do
+    if (( waited == 0 )); then
+      echo "$(date '+%F %T') host MemAvailable $(avail_mb) MB < needed $NEED_MB MB; waiting (HB_MEM_WAIT_SEC=${HB_MEM_WAIT_SEC:-86400})" | tee -a "$LOG"
+    fi
+    if (( waited >= ${HB_MEM_WAIT_SEC:-86400} )); then
+      echo "$(date '+%F %T') still $(avail_mb) MB available after ${waited}s; giving up" | tee -a "$LOG"; exit 1
+    fi
+    sleep 60; waited=$(( waited + 60 ))
+    (( waited % 600 == 0 )) && echo "$(date '+%F %T') MemAvailable $(avail_mb) MB, need $NEED_MB MB" >>"$LOG"
+  done
+  echo "$(date '+%F %T') memory ok: MemAvailable $(avail_mb) MB >= needed $NEED_MB MB" | tee -a "$LOG"
+fi
+
 echo "$(date '+%F %T') start $JOB_NAME ($CONFIG, HB_CONTINUE_MODE=$HB_CONTINUE_MODE, HB_VERIFIER_FEEDBACK=${HB_VERIFIER_FEEDBACK-true})" | tee -a "$LOG"
 
 # terminus-2 pipes the tmux pane into agent/terminus_2.pane for debugging only (the agent reads
