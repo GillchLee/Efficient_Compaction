@@ -3,10 +3,10 @@
   "models": {
     "qwen3.8-flash": {
       "read": 0.016,
-      "write": 0.2,
+      "write": 0.15,
+      "uncached": 0.15,
       "output": 0.47,
-      "_source": "Model Studio (DashScope) note 2026-10-25: input $0.15 cache-write $0.20 cache-read $0.016 output $0.47",
-      "uncached": 0.15
+      "_source": "Alibaba Cloud Model Studio pricing 2026-11-06 (International/US/EU): input $0.15, output $0.47 per M, single tier to 1M. Implicit context cache (what terminus-2 via litellm gets: no cache_control markers): creation billed as normal input ($0.15 -> write = uncached, alpha 9.4), hit $0.016 per litellm dashscope table (docs: 'does not use the 20% default, see console'). Hosted SKU is qwen3.8-flash; 'qwen3.8-flash-next' is the open-weight checkpoint, resellers price it differently."
     },
     "local-sonnet-like": {
       "read": 0.3,
@@ -65,6 +65,20 @@
       "uncached": 2.0,
       "output": 10.0,
       "_source": "platform.claude.com/docs pricing page, fetched 2026-11-03 (5m cache write; >200K long-context tier not applicable at L=80K)"
+    },
+    "qwen3.8-flash-explicit": {
+      "read": 0.016,
+      "write": 0.2,
+      "uncached": 0.15,
+      "output": 0.47,
+      "_source": "Same model with explicit cache (cache_control markers): creation ~125% of input = $0.20, hit $0.016 (litellm dashscope table 2026-11-06). alpha 12.5, beta 29.4."
+    },
+    "qwen3.8-flash-next": {
+      "read": 0.016,
+      "write": 0.15,
+      "uncached": 0.15,
+      "output": 0.47,
+      "_source": "Alias of qwen3.8-flash (implicit cache) for configs that name the open-weight checkpoint; served through Alibaba Cloud it is billed as qwen3.8-flash."
     }
   }
 }

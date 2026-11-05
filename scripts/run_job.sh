@@ -31,6 +31,8 @@ API_BASE=$(sed -n 's/^ *api_base: *//p' "$CONFIG" | head -1)
 case "$MODEL" in
   anthropic/*) [[ -n "${ANTHROPIC_API_KEY:-}" ]] || { echo "ANTHROPIC_API_KEY is not set (.env)" >&2; exit 1; } ;;
   openai/*)    [[ -n "${OPENAI_API_KEY:-}" ]]    || { echo "OPENAI_API_KEY is not set (.env)" >&2; exit 1; } ;;
+  dashscope/*) # Alibaba Cloud Model Studio (Qwen); DASHSCOPE_API_BASE selects the region (.env)
+    [[ -n "${DASHSCOPE_API_KEY:-}" ]] || { echo "DASHSCOPE_API_KEY is not set (.env)" >&2; exit 1; } ;;
   hosted_vllm/*)
     # local OpenAI-compatible server (vLLM): endpoint from the config's api_base or .env
     API_BASE=${API_BASE:-${HOSTED_VLLM_API_BASE:-}}

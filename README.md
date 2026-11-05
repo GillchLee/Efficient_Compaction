@@ -155,6 +155,28 @@ python analysis/fit_priors.py jobs/qwen_* --prices vllm-qwen3-32b --name terminu
 
 첫 실행 뒤 `jobs/<job>/token_turns/turns.csv` 의 `cache_read` 열이 0 이 아닌지 보세요. 0 이면 vLLM 이 `prompt_tokens_details.cached_tokens` 를 안 보내는 것이므로 prefix caching 을 켜야 합니다. `api_base` 를 설정에 쓰지 않으면 `.env` 의 `HOSTED_VLLM_API_BASE` 를 씁니다. `openai/` 접두사로 vLLM 을 가리키는 방식은 litellm 이 OpenAI 키를 요구하므로 `hosted_vllm/` 을 쓰세요.
 
+### 다른 모델 계열의 단가 (alpha, beta)
+
+수식은 단가의 비율만 씁니다: `alpha = write/read`(캐시 쓰기 ÷ 캐시 읽기), `beta = output/read`. 새 모델은 `configs/prices.json` 의 `models` 에 행 하나를 더하면 됩니다. 필드는 `read`(cache hit 입력), `write`(cache 생성 입력), `uncached`(캐시 안 된 입력, 기록용), `output`, `_source`(출처와 날짜). 단위는 $/M 이든 초/M 이든 같은 단위면 됩니다. 들어 있는 행과 비율:
+
+| 행 | read | write | output | alpha | beta | 비고 |
+|---|---|---|---|---|---|---|
+| `gpt-6-luna` | 0.01 | 0.10 | 0.50 | 10 | 50 | OpenAI 2026-10-29 |
+| `claude-haiku-5-5` | 0.01 | 0.125 | 0.50 | 12.5 | 50 | 100K 초과 구간(5배) 미반영 |
+| `claude-sonnet-5-5` | 0.10 | 2.50 | 10.0 | 25 | 100 | |
+| `qwen3.8-flash` | 0.016 | 0.15 | 0.47 | 9.4 | 29 | Alibaba Cloud Model Studio 2026-11-06, implicit cache (terminus-2 가 받는 과금) |
+| `qwen3.8-flash-explicit` | 0.016 | 0.20 | 0.47 | 12.5 | 29 | explicit cache(`cache_control`) 를 쓰는 경우 |
+| `qwen3.8-flash-next` | 0.016 | 0.15 | 0.47 | 9.4 | 29 | 오픈 가중치 이름용 별칭, 과금은 qwen3.8-flash |
+
+Qwen3.8 Flash 를 Alibaba Cloud 로 돌리는 명령은 OpenAI 모델과 같고 접두사만 다릅니다. litellm 이 `dashscope/qwen3.8-flash` 의 컨텍스트(991K)와 단가를 알고 있어 `model_info` 는 필요 없습니다. 캐시 히트는 `prompt_tokens_details.cached_tokens` 로 오므로 `turns.csv` 의 `cache_read` 가 그대로 채워집니다. prior 는 아직 없으니 Luna prior 로 시작해 첫 실행 뒤 `fit_priors.py` 로 만듭니다.
+
+```bash
+vi .env   # DASHSCOPE_API_KEY, DASHSCOPE_API_BASE(국제 리전)
+python configs/make_config.py --model dashscope/qwen3.8-flash --formula terminus2-gpt-6-luna --prices qwen3.8-flash \
+    --set g_prior_weight=0 --tasks-dir ./LHTB/tasks --tasks spot-scheduler-traces --hours 3 --job-name qwen_formula
+bash scripts/run_job.sh configs/sweep/qwen_formula.yaml
+```
+
 ### Docker 없이 (Daytona 샌드박스)
 
 Docker 를 쓸 수 없는 호스트에서는 `make_config.py --env daytona` 로 설정을 만들고 `.env` 에 `DAYTONA_API_KEY` 를 넣으면 같은 `run_job.sh` 로 돕니다. 기본값은 docker 이며 Daytona 키 없이도 동작합니다. Daytona 는 계정 동시 메모리 한도(10GiB) 때문에 `--concurrent 1`, 턴 속도는 docker 의 절반 정도입니다.
