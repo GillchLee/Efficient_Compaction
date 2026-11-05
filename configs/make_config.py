@@ -57,6 +57,15 @@ def short_model(model: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", m.lower())[:12]
 
 
+
+def _repo_relative(path: Path) -> str:
+    """Path as written in the yaml header: relative to the repo root when inside it."""
+    root = Path(__file__).resolve().parents[1]
+    try:
+        return str(path.resolve().relative_to(root))
+    except ValueError:
+        return str(path)
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
@@ -188,7 +197,7 @@ def main() -> int:
               + (f" handoff={','.join(a.handoff)}" if a.handoff else "")
               + (f" api_base={a.api_base}" if a.api_base else "") + "\n"
               + (f"# env: {' '.join(env_lines)}\n" if env_lines else "")
-              + "# run: bash scripts/run_job.sh " + str(out) + "\n")
+              + "# run: bash scripts/run_job.sh " + _repo_relative(out) + "\n")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(header + yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
     print(out)
