@@ -24,14 +24,12 @@ patches/                      Harbor 패치, 번호 순서로 적용 (아래 표
 configs/
   make_config.py              모델·압축 조건·환경(docker/daytona)·과제·시간·실행 옵션을 받아 job yaml 생성
   sweep/ smoke/ examples/     생성된(또는 손으로 쓴) job 설정
-  mac/                        macOS + Daytona 에서 돌린 stock terminus-2 설정 (native-threshold 방식)
   prices.json                 모델별 단가 ($/M 또는 로컬 모델은 s/M: cache read / cache write / output)
   priors.json                 모델별 비용 모델 파라미터 (analysis/fit_priors.py 가 채움)
 scripts/
   run_job.sh                  설정 파일 하나로 job 실행/이어서 실행 (.env 로드, 키·환경 확인, `# env:` 옵션, 끝나면 턴 표)
   run_sweep.sh                설정 여러 개를 PARALLEL 개씩 실행, 끝날 때마다 조건 비교표
   measure_vllm_prices.py      vLLM 서버의 prefill/cached/decode 시간을 재서 prices.json 행으로 기록
-  make_luna_chart.sh          Luna sweep 전체 차트 (docs/luna_sweeps_intro.html + chart.py)
   archive/                    끝난 실험의 일회성 체인 스크립트
 analysis/                     실행이 끝난 job 디렉터리를 읽는 집계 (입력은 전부 jobs/<job>)
   token_turns.py              턴별 prompt · cache read/write · output · 비용, 제출별 중간 점수 -> token_turns/*.csv
@@ -92,7 +90,6 @@ python configs/make_config.py --model openai/gpt-6-luna --formula terminus2-gpt-
 # 2. 실행 (같은 명령을 다시 실행하면 기존 job 을 이어서 진행)
 bash scripts/run_job.sh configs/sweep/sonnet-5-5_l80k.yaml
 setsid nohup bash scripts/run_job.sh configs/sweep/sonnet-5-5_l80k.yaml >/dev/null 2>&1 &   # Linux, 터미널과 분리
-nohup caffeinate -ims bash scripts/run_job.sh configs/mac/luna_ctx80k.yaml &                # macOS, 잠자기 방지
 PARALLEL=1 bash scripts/run_sweep.sh configs/sweep/luna10_*.yaml                             # 여러 조건을 차례로
 
 # 3. 집계 (run_job.sh 가 끝나면 token_turns 는 자동으로 씁니다)
@@ -100,7 +97,7 @@ python analysis/token_turns.py jobs/sonnet-5-5_l80k        # -> jobs/<job>/token
 python analysis/sweep_summary.py jobs/sonnet-5-5_* --out jobs/sweep_summary.csv
 python analysis/prefill_stats.py jobs/sonnet-5-5_* --md jobs/prefill.md
 python analysis/trajectory_issues.py jobs/sonnet-5-5_* --out jobs/issues.csv
-python analysis/chart.py jobs/sonnet-5-5_* jobs/lhtb-luna-ctx* --out jobs/chart.html
+python analysis/chart.py jobs/sonnet-5-5_* --out jobs/chart.html
 python analysis/reward_curve.py jobs/luna10_* --cond luna10_l60k=l60k --out jobs/reward_curve.csv --md jobs/reward_curve.md
 ```
 
@@ -146,17 +143,9 @@ python analysis/fit_priors.py jobs/qwen_* --prices vllm-qwen3-32b --name terminu
 
 첫 실행 뒤 `jobs/<job>/token_turns/turns.csv` 의 `cache_read` 열이 0 이 아닌지 보세요. 0 이면 vLLM 이 `prompt_tokens_details.cached_tokens` 를 안 보내는 것이므로 prefix caching 을 켜야 합니다. `api_base` 를 설정에 쓰지 않으면 `.env` 의 `HOSTED_VLLM_API_BASE` 를 씁니다. `openai/` 접두사로 vLLM 을 가리키는 방식은 litellm 이 OpenAI 키를 요구하므로 `hosted_vllm/` 을 쓰세요.
 
-### macOS + Daytona
+### Docker 없이 (Daytona 샌드박스)
 
-Docker 없이 클라우드 샌드박스로 돌린 구성입니다(`jobs/lhtb-luna-ctx*`). 설정은 `configs/mac/` 에 있고 stock terminus-2 + `--native-threshold` 방식입니다. 새로 만들려면 `make_config.py --env daytona` 에 같은 옵션을 주면 됩니다.
-
-```bash
-bash setup.sh && vi .env                       # DAYTONA_API_KEY 와 모델 키
-nohup caffeinate -ims bash scripts/run_job.sh configs/mac/luna_ctx80k.yaml &      # 잠자기 방지, 로그 jobs/logs/
-python configs/make_config.py --model openai/gpt-6-luna --env daytona --limit 80000 --tasks-dir ./LHTB/tasks --tasks 2048 chess-mate --concurrent 1
-```
-
-Daytona 의 동시 메모리 한도(10GiB) 때문에 `--concurrent 1`. 턴 속도는 docker 의 절반 정도(호출당 고정 비용 ~11 s vs ~4.5 s)라 같은 3 h 에 턴 수가 적습니다.
+Docker 를 쓸 수 없는 호스트에서는 `make_config.py --env daytona` 로 설정을 만들고 `.env` 에 `DAYTONA_API_KEY` 를 넣으면 같은 `run_job.sh` 로 돕니다. 기본값은 docker 이며 Daytona 키 없이도 동작합니다. Daytona 는 계정 동시 메모리 한도(10GiB) 때문에 `--concurrent 1`, 턴 속도는 docker 의 절반 정도입니다.
 
 ## 실행 옵션 (설정 파일에 기록됨)
 
@@ -243,7 +232,7 @@ trajectory 위치: `jobs/<job>/<task>__<id>/agent/trajectory.json`(본 대화), 
 ## 알아둘 점
 
 - **Daytona 메모리 한도.** 기본 등급은 계정 전체 동시 메모리가 10GiB입니다. vector-db, duckdb는 각각 8GB라 동시에 두 개를 띄울 수 없으니 `--concurrent 1`, `PARALLEL=1`로 실행하세요.
-- **Docker 호스트.** 에이전트 루프는 로컬에서 돌므로 셸이 죽으면 trial 이 끊깁니다. Linux 에서는 `setsid nohup`, macOS 에서는 `caffeinate` 로 띄우고, 같은 명령으로 이어서 실행하세요. Docker 의 기본 주소 풀은 네트워크 약 30개까지라 오래된 harbor 네트워크를 지워야 할 때가 있습니다.
+- **Docker 호스트.** 에이전트 루프는 로컬에서 돌므로 셸이 죽으면 trial 이 끊깁니다. `setsid nohup` 으로 띄우고, 같은 명령으로 이어서 실행하세요. Docker 의 기본 주소 풀은 네트워크 약 30개까지라 오래된 harbor 네트워크를 지워야 할 때가 있습니다.
 - **`harbor run -i`.** 태스크 필터 `-i/-x`는 `-p <tasks 경로>` 없이 쓰면 오류가 납니다. 태스크를 고를 때는 설정 파일의 `task_names`(`make_config.py --tasks`)를 쓰세요.
 - **업스트림 테스트.** LHTB 7ca0cac의 Harbor에는 원래부터 `tests/unit/agents/terminus_2/test_same_conversation_resume.py`(문법 오류)와 tmux 테스트 5개가 실패합니다. 이 패치와 무관합니다.
 - **터미널 기록 파일 폭주.** 이유 없는 거부를 많이 받으면 에이전트가 채점 정보를 찾으러 `/logs`를 뒤지기도 합니다. 이때 `cat /logs/agent/terminus_2.pane`(지금 터미널을 기록하는 파일)을 실행하면 출력이 같은 파일에 다시 쌓이면서 디스크가 가득 찹니다. 생기면 멈춘 Harbor를 `kill -INT`로 끝내고, 그 trial 폴더를 옮긴 뒤 같은 명령으로 이어서 실행하세요.

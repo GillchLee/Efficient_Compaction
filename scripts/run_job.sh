@@ -3,7 +3,6 @@
 #
 #   bash scripts/run_job.sh configs/sweep/<job>.yaml
 #   setsid nohup bash scripts/run_job.sh configs/sweep/<job>.yaml > /dev/null 2>&1 &   # detached (Linux)
-#   nohup caffeinate -ims bash scripts/run_job.sh ... &                                 # macOS
 #
 # Loads .env, checks the API key the model needs and that the environment (docker /
 # daytona) is usable, sets same-conversation continuation with binary feedback, resumes
