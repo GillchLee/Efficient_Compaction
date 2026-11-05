@@ -30,6 +30,7 @@ scripts/
   run_job.sh                  설정 파일 하나로 job 실행/이어서 실행 (.env 로드, 키·환경 확인, `# env:` 옵션, 끝나면 턴 표)
   run_sweep.sh                설정 여러 개를 PARALLEL 개씩 실행, 끝날 때마다 조건 비교표
   measure_vllm_prices.py      vLLM 서버의 prefill/cached/decode 시간을 재서 prices.json 행으로 기록
+  run_local_vllm.sh           로컬 vLLM 한 줄 실행: 서버 확인 → 단가 측정(없을 때) → 설정 생성 → run_job.sh
   archive/                    끝난 실험의 일회성 체인 스크립트
 analysis/                     실행이 끝난 job 디렉터리를 읽는 집계 (입력은 전부 jobs/<job>)
   token_turns.py              턴별 prompt · cache read/write · output · 비용, 제출별 중간 점수 -> token_turns/*.csv
@@ -121,7 +122,18 @@ tail -f jobs/logs/gpt-6-luna_l60k.log
 
 ### 로컬 모델 (vLLM)
 
-Harbor 는 `hosted_vllm/<served-model-name>` 과 `api_base` 를 받습니다. 세 단계입니다.
+Harbor 는 `hosted_vllm/<served-model-name>` 과 `api_base` 를 받습니다. 한 줄로 하려면 `scripts/run_local_vllm.sh` 가 아래 1~2 단계를 묶어 줍니다.
+
+```bash
+bash scripts/run_local_vllm.sh --model Qwen3-32B --api-base http://HOST:8000/v1 --context 131072 \
+    --limit 40000 --tasks spot-scheduler-traces --hours 1                         # 고정 한도
+bash scripts/run_local_vllm.sh --model Qwen3-32B --api-base http://HOST:8000/v1 --context 131072 \
+    --formula terminus2-gpt-6-luna-1.0 --tasks spot-scheduler-traces 2048 --hours 3 --concurrent 2 \
+    -- --set g_prior_weight=0                                                     # 동적 L*; 단가 행이 없으면 먼저 잽니다
+bash scripts/run_local_vllm.sh ... --dry-run                                      # 설정 파일만 쓰고 멈춤
+```
+
+단계별로 하면 다음과 같습니다.
 
 ```bash
 # 0. 서빙 (다른 서버여도 됨). prefix caching 이 켜져야 cache read 가 usage 에 보고됩니다 (최근 vLLM 은 기본 on)
