@@ -17,6 +17,7 @@
 #   --hours H           agent budget per task (default 3)
 #   --concurrent N      trials at once (default 1; keep the vLLM KV cache in mind)
 #   --job-name NAME     default <model>_<condition>
+#   --prices ROW        use this configs/prices.json row (e.g. qwen3.8-flash-next) instead of measuring the server
 #   --measure           re-measure prices even if the row exists
 #   --dry-run           stop after writing the config
 #   Anything after "--" is passed to configs/make_config.py (e.g. -- --set g_prior_weight=0 --verifier-feedback false)
@@ -27,7 +28,7 @@ cd "$(dirname "$0")/.."
 [[ -f .env ]] && { set -a; source .env; set +a; }
 
 MODEL=""; API_BASE="${HOSTED_VLLM_API_BASE:-}"; CONTEXT=""; COND=(); TASKS_DIR=./LHTB/tasks; TASKS=()
-HOURS=3; CONCURRENT=1; JOB=""; MEASURE=0; DRY=0; EXTRA=()
+HOURS=3; CONCURRENT=1; JOB=""; MEASURE=0; DRY=0; EXTRA=(); PRICES_ROW=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --model) MODEL=$2; shift 2 ;;
@@ -41,6 +42,7 @@ while [[ $# -gt 0 ]]; do
     --hours) HOURS=$2; shift 2 ;;
     --concurrent) CONCURRENT=$2; shift 2 ;;
     --job-name) JOB=$2; shift 2 ;;
+    --prices) PRICES_ROW=$2; shift 2 ;;
     --measure) MEASURE=1; shift ;;
     --dry-run) DRY=1; shift ;;
     --) shift; EXTRA=("$@"); break ;;
@@ -57,9 +59,12 @@ if ! curl -sf -m 10 -H "Authorization: Bearer ${HOSTED_VLLM_API_KEY:-EMPTY}" "${
   exit 1
 fi
 
-PRICES="vllm-$(echo "$MODEL" | tr '[:upper:]/' '[:lower:]-')"
+PRICES=${PRICES_ROW:-"vllm-$(echo "$MODEL" | tr '[:upper:]/' '[:lower:]-')"}
 if [[ "${CONDNAME}" == formula ]]; then
-  if [[ $MEASURE -eq 1 ]] || ! "$PY" -c "import json,sys; sys.exit('$PRICES' not in json.load(open('configs/prices.json'))['models'])"; then
+  if [[ -n "$PRICES_ROW" ]]; then
+    "$PY" -c "import json,sys; sys.exit('$PRICES' not in json.load(open('configs/prices.json'))['models'])" \
+      || { echo "--prices $PRICES is not a row of configs/prices.json" >&2; exit 2; }
+  elif [[ $MEASURE -eq 1 ]] || ! "$PY" -c "import json,sys; sys.exit('$PRICES' not in json.load(open('configs/prices.json'))['models'])"; then
     echo "measuring prices for $MODEL -> configs/prices.json[$PRICES]"
     "$PY" scripts/measure_vllm_prices.py --api-base "$API_BASE" --model "$MODEL" --name "$PRICES"
   fi
