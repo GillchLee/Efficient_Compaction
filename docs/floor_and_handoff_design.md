@@ -52,7 +52,7 @@ Luna·OpenAI 가격(β 50)에서는 L\* 가 바닥 위에 있으므로 바닥이
 
 single 800 은 stock 대비 턴당 입력 비용 −24%, 압축은 더 잦다(K 15). ρ 가 stock 과 같다면 이것이 가장 싸고, ρ 가 커지면(정보 손실) 2절의 바닥이 K 를 올려 비용 이점이 줄어든다. 실험이 가르는 것은 그 ρ 다.
 
-## 4. 실험 (2026-11-04 03:37 시작, `scripts/_chain_floor_lp.sh`, 로그 `jobs/logs/floor_lp_chain.log`)
+## 4. 실험 (2026-11-04 03:37 시작, `scripts/archive/_chain_floor_lp.sh`, 로그 `jobs/logs/floor_lp_chain.log`)
 
 과제: spot-scheduler-traces, apex-ib244-matter, apex-law433-matter(l60k 에서 점수가 계단식으로 오른 과제). GPT-6 Luna, docker, 과제당 2시간, 3과제 동시, 2 job 씩.
 

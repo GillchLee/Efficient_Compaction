@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run several job configs, PARALLEL at a time, then refresh the per-turn tables and the sweep table.
 #
-#   bash scripts/run_sweep.sh configs/sweep/luna_ctx*.yaml           # 2 at a time (default)
+#   bash scripts/run_sweep.sh configs/mac/luna_ctx*.yaml             # 2 at a time (default)
 #   PARALLEL=1 bash scripts/run_sweep.sh configs/sweep/sonnet_*.yaml # one job at a time
 #
 # Each config is its own Harbor job (jobs/<job_name>) started through scripts/run_job.sh,

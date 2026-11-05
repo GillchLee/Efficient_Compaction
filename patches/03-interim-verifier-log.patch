@@ -1,0 +1,58 @@
+--- a/harbor/src/harbor/trial/trial.py
++++ b/harbor/src/harbor/trial/trial.py
+@@ -582,6 +582,35 @@
+         finally:
+             self.result.agent_setup.finished_at = datetime.now(timezone.utc)
+ 
++    def _record_interim_verifier(
++        self,
++        *,
++        submission: int,
++        remaining_sec: float | None,
++        result: VerifierResult | None,
++    ) -> None:
++        """Append one interim verifier outcome to <trial>/interim_verifier.jsonl.
++
++        Host-only record (never mounted into the environment); the agent still
++        sees only the binary rejection.
++        """
++        rewards = result.rewards if result is not None else None
++        record = {
++            "submission": submission,
++            "timestamp": datetime.now(timezone.utc).isoformat(),
++            "remaining_sec": None if remaining_sec is None else round(remaining_sec, 1),
++            "status": "timeout" if result is None else "ok",
++            "reward": (rewards or {}).get("reward"),
++            "rewards": rewards,
++            "passed": _verifier_passed(result),
++        }
++        try:
++            path = self._trial_paths.trial_dir / "interim_verifier.jsonl"
++            with path.open("a") as f:
++                f.write(json.dumps(record) + "\n")
++        except OSError as e:
++            self._logger.warning("Failed to record interim verifier result: %s", e)
++
+     async def _run_interim_verifier(self) -> VerifierResult:
+         """Run verifier mid-trial for continue_until_timeout feedback."""
+         mode = resolve_task_verifier_mode(self._task.config)
+@@ -1094,6 +1123,9 @@
+                         "Interim verifier timed out during continue_until_timeout; "
+                         "resuming agent until overall timeout"
+                     )
++                    self._record_interim_verifier(
++                        submission=phase + 1, remaining_sec=remaining, result=None
++                    )
+                     phase += 1
+                     if same_conversation:
+                         instruction = _format_same_conversation_rejection(
+@@ -1121,6 +1153,9 @@
+                     await self._hide_shared_verifier_artifacts()
+                     await self._signal_agent_process_tree("CONT")
+ 
++                self._record_interim_verifier(
++                    submission=phase + 1, remaining_sec=remaining, result=interim
++                )
+                 if _verifier_passed(interim):
+                     break
+ 

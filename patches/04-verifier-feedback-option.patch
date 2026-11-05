@@ -1,0 +1,113 @@
+--- a/harbor/src/harbor/trial/trial.py
++++ b/harbor/src/harbor/trial/trial.py
+@@ -297,6 +297,47 @@
+     )
+ 
+ 
++def _verifier_feedback_enabled() -> bool:
++    """HB_VERIFIER_FEEDBACK=false withholds the interim verifier outcome from the agent.
++
++    The verifier still runs on every submission and is recorded in
++    interim_verifier.jsonl; the agent is resumed with a neutral continuation turn
++    instead of a rejection. Default (unset / true): stock behaviour.
++    """
++    value = os.environ.get("HB_VERIFIER_FEEDBACK", "true").strip().lower()
++    return value not in {"0", "false", "no", "off"}
++
++
++def _format_neutral_continue(*, phase: int, remaining_sec: int) -> str:
++    """Continuation turn that does not reveal whether the submission passed."""
++    return (
++        "Your submission has been recorded. The result of verification is not "
++        "disclosed during the trial, which continues until its time budget ends. "
++        "Continue working from the current terminal and conversation state: "
++        "re-read the original requirements, review and strengthen your "
++        "implementation, and run your own focused checks; submit again whenever "
++        f"you have improved the solution. This is continuation {phase}; "
++        f"approximately {remaining_sec} seconds remain."
++    )
++
++
++def _format_neutral_continue_instruction(
++    base_instruction: str, *, phase: int, remaining_sec: int
++) -> str:
++    """New-conversation (phase) variant of the neutral continuation."""
++    return (
++        f"{base_instruction.rstrip()}\n\n"
++        "---\n"
++        "## CONTINUE WORKING\n\n"
++        f"Your previous submission (phase {phase}) has been recorded; its verification "
++        "result is not disclosed. You still have approximately "
++        f"{remaining_sec} seconds remaining in this trial.\n\n"
++        "**Do not stop.** This trial only ends at timeout. Your shell session and "
++        "project files are unchanged — review the requirements, strengthen your "
++        "implementation and run your own checks before submitting again.\n"
++    )
++
++
+ def _format_process_reward_continue(*, active_sec: float, remaining_sec: float) -> str:
+     """Resume after a hidden timed checkpoint without disclosing its result."""
+     return (
+@@ -603,6 +644,7 @@
+             "reward": (rewards or {}).get("reward"),
+             "rewards": rewards,
+             "passed": _verifier_passed(result),
++            "feedback": "binary" if _verifier_feedback_enabled() else "none",
+         }
+         try:
+             path = self._trial_paths.trial_dir / "interim_verifier.jsonl"
+@@ -1083,7 +1125,11 @@
+                         remaining = remaining_agent_sec() or 0
+                         if reason == "confirmed_task_complete":
+                             phase += 1
+-                            instruction = _format_same_conversation_rejection(
++                            instruction = (
++                                _format_same_conversation_rejection
++                                if _verifier_feedback_enabled()
++                                else _format_neutral_continue
++                            )(
+                                 phase=phase,
+                                 remaining_sec=max(0, int(remaining)),
+                             )
+@@ -1127,7 +1173,19 @@
+                         submission=phase + 1, remaining_sec=remaining, result=None
+                     )
+                     phase += 1
+-                    if same_conversation:
++                    if not _verifier_feedback_enabled():
++                        instruction = (
++                            _format_neutral_continue(
++                                phase=phase, remaining_sec=max(0, int(remaining))
++                            )
++                            if same_conversation
++                            else _format_neutral_continue_instruction(
++                                base_instruction,
++                                phase=phase,
++                                remaining_sec=max(0, int(remaining)),
++                            )
++                        )
++                    elif same_conversation:
+                         instruction = _format_same_conversation_rejection(
+                             phase=phase,
+                             remaining_sec=max(0, int(remaining)),
+@@ -1160,7 +1218,19 @@
+                     break
+ 
+                 phase += 1
+-                if same_conversation:
++                if not _verifier_feedback_enabled():
++                    instruction = (
++                        _format_neutral_continue(
++                            phase=phase, remaining_sec=max(0, int(remaining))
++                        )
++                        if same_conversation
++                        else _format_neutral_continue_instruction(
++                            base_instruction,
++                            phase=phase,
++                            remaining_sec=max(0, int(remaining)),
++                        )
++                    )
++                elif same_conversation:
+                     instruction = _format_same_conversation_rejection(
+                         phase=phase,
+                         remaining_sec=max(0, int(remaining)),

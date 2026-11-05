@@ -28,9 +28,17 @@ if [[ -f .env ]]; then
 fi
 
 MODEL=$(sed -n 's/^ *model_name: *//p' "$CONFIG" | head -1)
+API_BASE=$(sed -n 's/^ *api_base: *//p' "$CONFIG" | head -1)
 case "$MODEL" in
   anthropic/*) [[ -n "${ANTHROPIC_API_KEY:-}" ]] || { echo "ANTHROPIC_API_KEY is not set (.env)" >&2; exit 1; } ;;
   openai/*)    [[ -n "${OPENAI_API_KEY:-}" ]]    || { echo "OPENAI_API_KEY is not set (.env)" >&2; exit 1; } ;;
+  hosted_vllm/*)
+    # local OpenAI-compatible server (vLLM): endpoint from the config's api_base or .env
+    API_BASE=${API_BASE:-${HOSTED_VLLM_API_BASE:-}}
+    [[ -n "$API_BASE" ]] || { echo "hosted_vllm/ needs api_base in $CONFIG (make_config.py --api-base) or HOSTED_VLLM_API_BASE (.env)" >&2; exit 1; }
+    if ! curl -sf -m 10 -H "Authorization: Bearer ${HOSTED_VLLM_API_KEY:-EMPTY}" "${API_BASE%/}/models" >/dev/null; then
+      echo "vLLM server not reachable at ${API_BASE%/}/models" >&2; exit 1
+    fi ;;
 esac
 if grep -q '^  type: daytona' "$CONFIG"; then
   [[ -n "${DAYTONA_API_KEY:-}" ]] || { echo "DAYTONA_API_KEY is not set (.env)" >&2; exit 1; }
@@ -40,11 +48,19 @@ elif ! docker info >/dev/null 2>&1; then
 fi
 
 export HB_CONTINUE_MODE=${HB_CONTINUE_MODE-same_conversation}
-export HB_VERIFIER_FEEDBACK_MODE=binary
+export HB_VERIFIER_FEEDBACK_MODE=binary   # kept for older configs; Harbor 7ca0cac does not read it
 export DOCKER_DEFAULT_PLATFORM=linux/amd64
+# Trial-loop options recorded by make_config.py as "# env: KEY=VALUE ..." (HB_VERIFIER_FEEDBACK,
+# HB_CONTINUE_MODE, HB_PROCESS_REWARD*): the config wins over the shell so a job dir reproduces.
+for kv in $(sed -n 's/^# env: *//p' "$CONFIG"); do
+  case "$kv" in
+    HB_[A-Z_]*=*) export "$kv" ;;
+    *) echo "ignoring config env entry: $kv" >&2 ;;
+  esac
+done
 
 mkdir -p jobs/logs
-echo "$(date '+%F %T') start $JOB_NAME ($CONFIG, HB_CONTINUE_MODE=$HB_CONTINUE_MODE)" | tee -a "$LOG"
+echo "$(date '+%F %T') start $JOB_NAME ($CONFIG, HB_CONTINUE_MODE=$HB_CONTINUE_MODE, HB_VERIFIER_FEEDBACK=${HB_VERIFIER_FEEDBACK-true})" | tee -a "$LOG"
 
 # terminus-2 pipes the tmux pane into agent/terminus_2.pane for debugging only (the agent reads
 # the screen with capture-pane, the trajectory holds the observations). A command that floods

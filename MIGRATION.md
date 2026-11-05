@@ -89,3 +89,16 @@ GPT-6 Luna, LHTB 2.0 3과제, 3시간, docker. Lp/L0/m/γ 는 `terminus2-gpt-6-l
 ## Luna LHTB 1.0 6과제 sweep — `jobs/luna10_{l60k,l140k,l160k,formula_nog}` (2026-11-04 00:13 ~ 12:41)
 
 3시간·6과제·동시 6. 과제·시간당 비용 l60k 0.317 / l140k 0.417 / l160k 0.441 / **formula 0.285** ($/턴 0.00080 / 0.00117 / 0.00129 / 0.00069). reward 는 ib244·spot·chess·2048 에서 같거나 formula 가 높고, investment-banking 만 formula 가 제출 없음(루프 궤적, K 12 < K_min 14), law433 formula trial 은 docker pull 실패로 미실행. 상세와 창 하한·손 넘김 실험(7조건 × 3과제)은 `docs/floor_and_handoff_design.md` §5–6.
+
+## 2026-11-05 정리 (기본 동작 불변, 옵션 추가)
+
+| 전 | 후 |
+|---|---|
+| `patches/harbor-token-and-summary-tracking.patch` 1개 | `patches/01…04-*.patch` 4개, `setup.sh` 가 순서대로 적용. 04 는 새 옵션 `HB_VERIFIER_FEEDBACK` |
+| `optlimit/harbor_agent.py` | `optlimit/adapters/harbor_terminus2.py` + `terminus2_handoff.py`(mixin); `harbor_agent.py` 는 shim 이라 설정의 `import_path` 는 그대로 |
+| (없음) | `optlimit/usage.py`, `optlimit/adapters/chat_loop.py`(참조 어댑터), `docs/adapter_guide.md` |
+| `configs/sweep/luna_ctx*.yaml`, `configs/smoke/luna_ctx6k_smoke.yaml` | `configs/mac/` (macOS + Daytona 구성) |
+| `scripts/_chain_*.sh` | `scripts/archive/` |
+| `run_job.sh` 가 HB_* 를 고정 export | `make_config.py --verifier-feedback/--continue-mode` → yaml `# env:` 줄 → `run_job.sh` 가 export |
+| (없음) | vLLM: `make_config.py --api-base/--context-window/--model-info`, `run_job.sh` 의 `hosted_vllm/` 분기, `scripts/measure_vllm_prices.py` |
+| (없음) | `analysis/reward_curve.py` (시간·턴·비용 축 reward 곡선) |

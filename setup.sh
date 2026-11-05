@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Rebuild the experiment workspace from scratch:
-#   ./LHTB at the pinned commit + Harbor patch + ./.venv with the patched Harbor and optlimit.
+#   ./LHTB at the pinned commit + Harbor patches (patches/NN-*.patch, in order) + ./.venv with the patched Harbor and optlimit.
 #
 #   bash setup.sh                 # LHTB -> ./LHTB, venv -> ./.venv
 #
@@ -14,7 +14,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 LHTB_DIR=${LHTB_DIR:-$HERE/LHTB}
 LHTB_URL=${LHTB_URL:-https://github.com/zli12321/LHTB}
 LHTB_COMMIT=7ca0cacea9bf6a0694eaad7306bed794eaaaabce
-PATCH=$HERE/patches/harbor-token-and-summary-tracking.patch
+PATCH_DIR=$HERE/patches
 PY=${PY:-3.12}
 
 for cmd in git uv; do
@@ -45,16 +45,18 @@ if [[ "${SKIP_LFS:-0}" != 1 ]]; then
   git -C "$LHTB_DIR" lfs pull
 fi
 
-# 2. Harbor patch: per-call cache write + last usage, short-summary tracking, interim verifier log
-if git -C "$LHTB_DIR" apply --check "$PATCH" 2>/dev/null; then
-  git -C "$LHTB_DIR" apply "$PATCH"
-  echo "applied $(basename "$PATCH")"
-elif git -C "$LHTB_DIR" apply --reverse --check "$PATCH" 2>/dev/null; then
-  echo "patch already applied"
-else
-  echo "patch does not apply cleanly to $LHTB_DIR" >&2
-  exit 1
-fi
+# 2. Harbor patches, in order (patches/NN-*.patch; each one is skipped when already applied)
+for PATCH in "$PATCH_DIR"/[0-9][0-9]-*.patch; do
+  if git -C "$LHTB_DIR" apply --check "$PATCH" 2>/dev/null; then
+    git -C "$LHTB_DIR" apply "$PATCH"
+    echo "applied $(basename "$PATCH")"
+  elif git -C "$LHTB_DIR" apply --reverse --check "$PATCH" 2>/dev/null; then
+    echo "already applied: $(basename "$PATCH")"
+  else
+    echo "patch does not apply cleanly to $LHTB_DIR: $(basename "$PATCH")" >&2
+    exit 1
+  fi
+done
 
 # 3. venv: patched Harbor (+ Daytona SDK), optlimit (this repo), pytest
 cd "$HERE"
