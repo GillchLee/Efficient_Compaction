@@ -108,8 +108,9 @@ def main() -> int:
     if a.dry_run:
         return 0
     path = Path(a.out)
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text()) if path.exists() else {"models": {}}
     data["models"][a.name] = row
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     print(f"wrote {path} models[{a.name}]", file=sys.stderr)
     return 0

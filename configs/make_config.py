@@ -42,6 +42,7 @@ Prints the output path; the file is a plain Harbor config and can be edited by h
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -129,8 +130,17 @@ def main() -> int:
         kwargs["temperature"] = a.temperature
     if agent_kind == "optlimit":
         if a.formula or a.balance:
-            ol = {"mode": "formula" if a.formula else "balance", "prior": a.formula or a.balance, "lookahead": 1}
+            prior = a.formula or a.balance
+            priors = json.loads((HERE / "priors.json").read_text()).get("harness", {})
+            if prior not in priors:
+                ap.error(f"--formula/--balance {prior!r} is not in configs/priors.json "
+                         f"(known: {', '.join(sorted(priors))})")
+            ol = {"mode": "formula" if a.formula else "balance", "prior": prior, "lookahead": 1}
             if a.prices:
+                prices = json.loads((HERE / "prices.json").read_text()).get("models", {})
+                if a.prices not in prices:
+                    ap.error(f"--prices {a.prices!r} is not in configs/prices.json "
+                             f"(known: {', '.join(sorted(prices))}); run scripts/measure_vllm_prices.py first")
                 ol["prices"] = a.prices
         elif a.limit == "native":
             ol = {"mode": "off"}
