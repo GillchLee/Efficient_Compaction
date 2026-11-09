@@ -97,6 +97,36 @@
    "summary_out": 7526,
    "phi": 0.0198,
    "_detail": "L0 = median cache read at the first compacted turn, Lp = median cache write there (full post-compaction prompt 12560); g median 349 / mean 562 (q25 235, q75 588); L_before median 43565; summarization input 2.381 x L, uncached fraction 0.105; first prompt 3411."
+  },
+  "claude-code-hub": {
+   "source": "Harbor Hub TB4.0 / Science public Claude Code trajectories (GLM-5.3-Flash, Qwen3.8-Max, Kimi K3, Sonnet 5); restored from the pre-refactor proxy priors",
+   "Lp": 15000,
+   "L0": 16900,
+   "g": 2100,
+   "m": 1,
+   "gamma": 1.0,
+   "summary_out": 4400,
+   "_detail": "Post-compaction prompt 27.9-32.8K = cached fixed prefix L0 16.9K + new write (summary 4.4K + re-attached files/todos ~10K) -> Lp (new write, this cost model's definition) ~15K. One summarization request (m=1) that re-sends system+tools+history: cache hit while the TTL is live (gamma ~1), cold after a long gap (gamma -> alpha). Refit from proxy logs before trusting L*."
+  },
+  "codex-hub": {
+   "source": "Harbor Hub TB4.0 / Science public Codex trajectories (GPT-5.6 Sol/Terra/Luna, GPT-6 Astra); restored from the pre-refactor proxy priors",
+   "Lp": 4500,
+   "L0": 11800,
+   "g": 1900,
+   "m": 1,
+   "gamma": 1.0,
+   "summary_out": 4500,
+   "_detail": "Post-compaction prompt 14.3-19.3K = cache hit 9.9-12.4K (base instructions + tools + env context) + new write 3.1-6.7K (bridge of recent user messages + summary) -> L0 11.8K, Lp ~4.5K. Local compaction = one summarization request on the full history (m=1)."
+  },
+  "codex-luna-hub": {
+   "source": "Harbor Hub tb40lp CX40_GPT-6_Luna (codex 0.159, 12 trajectories, 24 native compactions at ~244.8K = 272K*0.9); restored from the pre-refactor proxy priors",
+   "Lp": 2900,
+   "L0": 12000,
+   "g": 870,
+   "m": 1,
+   "gamma": 1.0,
+   "summary_out": 4500,
+   "_detail": "Median post-compaction prompt 14.9K with cached prefix ~12.0K -> Lp (new write) ~2.9K. g median 868 (mean 2023). summary_out not logged in ATIF: codex-hub value used."
   }
  }
 }

@@ -3,6 +3,7 @@
 #
 #   bash scripts/run_job.sh configs/sweep/<job>.yaml
 #   setsid nohup bash scripts/run_job.sh configs/sweep/<job>.yaml > /dev/null 2>&1 &   # detached (Linux)
+#   nohup caffeinate -ims bash scripts/run_job.sh configs/sweep/<job>.yaml > /dev/null 2>&1 &   # detached, no sleep (macOS)
 #
 # Loads .env, checks the API key the model needs and that the environment (docker /
 # daytona) is usable, sets same-conversation continuation with binary feedback, resumes
@@ -67,6 +68,15 @@ mkdir -p jobs/logs
 # have it free or the kernel OOM killer picks a victim. Need = n_concurrent_trials x the
 # largest memory_mb among the selected tasks + HB_MEM_MARGIN_MB for harbor/verifier.
 # HB_MEM_CHECK=0 skips it; HB_MEM_WAIT_SEC=0 fails instead of waiting (default: wait 24 h).
+# Skipped for daytona (containers run remotely) and on hosts without /proc/meminfo (macOS),
+# where Docker Desktop's own memory setting is the limit to check.
+if [[ "${HB_MEM_CHECK:-1}" != 0 ]] && grep -q '^  type: daytona' "$CONFIG"; then
+  HB_MEM_CHECK=0
+fi
+if [[ "${HB_MEM_CHECK:-1}" != 0 && ! -r /proc/meminfo ]]; then
+  echo "$(date '+%F %T') no /proc/meminfo on this host: skipping the host memory check" | tee -a "$LOG"
+  HB_MEM_CHECK=0
+fi
 if [[ "${HB_MEM_CHECK:-1}" != 0 ]]; then
   NEED_MB=$(python3 - "$CONFIG" <<'PY'
 import re, sys, pathlib

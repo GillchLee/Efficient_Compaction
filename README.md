@@ -218,6 +218,22 @@ agents:
       # optlimit: {mode: formula, prior: terminus2-sonnet-5-5, prices: claude-sonnet-5-5, lookahead: 1}
 ```
 
+## 다른 압축 방식: Claude Code · Codex
+
+terminus-2 밖의 하네스는 압축을 CLI 안에서 스스로 하므로, optlimit 은 (1) 하네스 자체 임계값을 시작할 때 정하거나
+(정적 L), (2) 프록시가 호출마다 usage 를 보고 원하는 턴에 하네스의 **자기 압축**을 일으킨다(balance / formula):
+Codex 는 보고 usage 를 신호값으로 바꾸고(trigger usage), Claude Code 는 usage 를 듣지 않아 `prompt is too long` 400 으로
+반응형 압축을 부른다(trigger error, 창 최소 4턴). 실제 CLI 스모크 결과와 조사·설계·실험 계획은 `docs/other_harnesses.md`.
+
+```bash
+uv pip install -e '.[proxy]'
+python configs/make_harness_config.py --harness codex --model openai/gpt-6-luna \
+    --balance codex-luna-hub --prices gpt-6-luna --learn --tasks seismo_cross_correlation_lag__01 --hours 3
+python configs/make_harness_config.py --harness claude-code --model anthropic/claude-haiku-5-5 --limit 87k ...
+bash scripts/run_harness_job.sh configs/sweep/<job>.yaml          # 프록시를 띄우고 run_job.sh
+python analysis/proxy_turns.py jobs/logs/<job>.proxy.jsonl --prices gpt-6-luna --job-dir jobs/<job>-proxy
+```
+
 ## 비용 모델 파라미터와 리플레이
 
 `docs/cost_model_derivation2.pdf` 의 모델 A(창 반복의 읽기·쓰기 비용)에 요약 호출 비용을 더한 모델 B 를 씁니다(`optlimit/cost_model.py` 머리말). 파라미터는 측정값에서 뽑습니다.
