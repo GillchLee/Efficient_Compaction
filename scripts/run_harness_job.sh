@@ -86,7 +86,8 @@ case "$MODEL" in
 esac
 
 # Harbor >= 0.20 enforces per-task egress allowlists: let the agent container reach the proxy.
-case "$HARBOR_PROFILE" in 0.25*) export HARBOR_EXTRA_ARGS="${HARBOR_EXTRA_ARGS:-} --allow-agent-host $HOST" ;; esac
+# (--allow-environment-host covers agent setup in tasks whose whole environment is allowlisted.)
+case "$HARBOR_PROFILE" in 0.25*) export HARBOR_EXTRA_ARGS="${HARBOR_EXTRA_ARGS:-} --allow-agent-host $HOST --allow-environment-host $HOST" ;; esac
 
 python -m optlimit.serve "${ARGS[@]}" >>"jobs/logs/$JOB_NAME.proxy.out" 2>&1 &
 PROXY_PID=$!

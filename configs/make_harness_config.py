@@ -56,6 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
     add_benchmark_args(ap)
     ap.add_argument("--env", choices=["docker", "daytona"], default="docker")
     ap.add_argument("--concurrent", type=int, default=1)
+    ap.add_argument("--setup-timeout", type=int, metavar="SEC",
+                    help="agent setup (CLI install in the container) timeout; default: the harness profile's, else Harbor's 360")
     ap.add_argument("--verifier-feedback", choices=["true", "false", "score"])
     ap.add_argument("--job-name")
     ap.add_argument("--jobs-dir", default="./jobs")
@@ -116,9 +118,18 @@ def main(argv: list[str] | None = None) -> int:
     job = a.job_name or f"{a.harness}-{short_model(a.model)}_{cond}"
     out = Path(a.out) if a.out else HERE / "sweep" / f"{job}.yaml"
     agent = {**prof.agent, "model_name": a.model, "override_timeout_sec": int(hours * 3600), "kwargs": kwargs}
+    setup_timeout = a.setup_timeout or prof.setup_timeout_sec
+    if setup_timeout:
+        agent["override_setup_timeout_sec"] = int(setup_timeout)
+    if harbor != "lhtb-fork" and prof.install_hosts:
+        # Harbor >= 0.20 egress allowlists: the CLI install has to get out of tasks that deny egress
+        # (the proxy host itself is added at launch by scripts/run_harness_job.sh)
+        agent["extra_allowed_hosts"] = list(prof.install_hosts)
     env: dict = {"type": a.env, "force_build": False, "delete": True}
     if a.env == "daytona":
         env["kwargs"] = {"auto_stop_interval_mins": int(hours * 60) + 60, "auto_delete_interval_mins": 30}
+    if harbor != "lhtb-fork" and prof.install_hosts:
+        env["extra_allowed_hosts"] = list(prof.install_hosts)   # agent setup runs under the environment baseline
     cfg = {"job_name": job, "jobs_dir": a.jobs_dir, "n_attempts": 1, "n_concurrent_trials": a.concurrent,
            "timeout_multiplier": 1.0, "environment": env, "agents": [agent], "datasets": [dataset]}
     env_lines = [ln for ln in [continue_env_line(cont or "same_conversation")] if ln]

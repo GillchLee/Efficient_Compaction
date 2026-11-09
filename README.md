@@ -86,6 +86,8 @@ vi .env                  # OPENAI_API_KEY / ANTHROPIC_API_KEY / DAYTONA_API_KEY
 | `lhtb-fork`(기본) | `bash setup.sh` | `.venv` | `lhtb1`, `lhtb2`, `tb4` | terminus-2(in-process), claude-code, codex |
 | `0.25` | `bash setup.sh --profile harbor25` | `.venv-h25` | `swe_marathon`, `frontier_swe_v2` | terminus-2-proxy, claude-code, codex (모두 프록시) |
 
+자세한 것(태스크·네트워크 정책·스모크 결과)은 `docs/benchmarks_harbor25.md`.
+
 ```bash
 bash setup.sh --profile harbor25
 git clone --depth 1 https://github.com/abundant-ai/swe-marathon data/swe-marathon

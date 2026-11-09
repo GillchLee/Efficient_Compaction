@@ -23,6 +23,8 @@ class HarnessProfile:
     band: dict = field(default_factory=dict)   # low_cap / high / limit_max (tokens)
     native_band: dict = field(default_factory=dict)  # harness threshold inside the band (proxy mode)
     agent_kwargs: dict = field(default_factory=dict)  # fixed agent kwargs (harnesses without a `compaction:` kwarg)
+    setup_timeout_sec: int | None = None  # CLI install inside the task container (Harbor default: 360 s)
+    install_hosts: tuple[str, ...] = ()    # hosts the CLI install needs (tasks with an egress allowlist)
     min_window_turns: int = 3         # proxy-side guard: turns a window lasts before the next compaction
     # request classification (proxy) -------------------------------------------------------------
     summary_prefixes: tuple[str, ...] = ()     # last user message starts with: the harness's compaction call
@@ -80,8 +82,10 @@ PROFILES: dict[str, HarnessProfile] = {
         trigger="error",
         band={"low_cap": 50_000, "high": 950_000, "limit_max": 180_000},
         native_band={"window": 200_000},      # terminus-2's own trigger stays at the model window
+        # no litellm num_retries: litellm would retry the proxy's 400 itself and the harness would never
+        # see the context error (Harbor's own retry already skips ContextLengthExceededError)
         agent_kwargs={"parser_name": "json", "enable_summarize": True, "proactive_summarization_threshold": 8000,
-                      "record_terminal_session": True, "llm_call_kwargs": {"max_tokens": 16384, "num_retries": 6}},
+                      "record_terminal_session": True, "llm_call_kwargs": {"max_tokens": 16384}},
         min_window_turns=3,
         summary_prefixes=(
             "You are about to hand off your work to another AI agent",
@@ -107,6 +111,11 @@ PROFILES: dict[str, HarnessProfile] = {
         summary_markers=("Your task is to create a detailed summary of the conversation so far",),
         window_start_prefixes=("This session is being continued from a previous conversation",),
         default_prior="claude-code-hub",
+        setup_timeout_sec=1200,
+        # Harbor's claude-code setup apt-installs curl/nodejs/npm when the image has apt, then runs the
+        # bootstrap installer
+        install_hosts=("downloads.claude.ai", "archive.ubuntu.com", "security.ubuntu.com", "deb.debian.org",
+                       "security.debian.org"),
         notes="one summary request (m=1); its own threshold fires ~25% before CLAUDE_CODE_AUTO_COMPACT_WINDOW x PCT",
     ),
     "codex": HarnessProfile(
@@ -122,6 +131,10 @@ PROFILES: dict[str, HarnessProfile] = {
         summary_markers=("You are performing a CONTEXT CHECKPOINT COMPACTION",),
         window_start_prefixes=("Another language model started to solve this problem",),
         default_prior="codex-luna-hub",
+        setup_timeout_sec=1200,
+        install_hosts=("registry.npmjs.org", "nodejs.org", "github.com", "objects.githubusercontent.com",
+                       "raw.githubusercontent.com", "archive.ubuntu.com", "security.ubuntu.com", "deb.debian.org",
+                       "security.debian.org"),
         notes="local compaction behind a custom provider: one summary request without tools (m=1)",
     ),
 }
