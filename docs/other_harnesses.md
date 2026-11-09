@@ -140,6 +140,26 @@ API 키 없이 트리거 경로만 확인하려고 `scripts/fake_llm_upstream.py
 과정에서 고친 것: Claude Code 요약 요청 인식(접두 → 포함), 설치형 에이전트의 완료 표시(`termination_reason`), 프록시 쪽 최소 창 가드와
 "압축 대기 중에는 신호를 계속 보냄", Codex 의 `model_context_window` 미설정.
 
+### 실제 API 검증 (2026-11-09, Claude Code 2.1.3xx + `anthropic/claude-haiku-5-5`)
+
+`seismo_cross_correlation_lag__01`, 20분, Docker Desktop. 같은 L = 40K 를 두 경로로.
+
+| | 동적: 프록시 `--proxy-fixed 40k` (trigger error, 최소 창 4) | 정적: `--limit 40k` (창 100K × 40%, 프록시는 관측만) |
+|---|---|---|
+| 압축 직전 main prompt | 40,068 / 40,247 / 40,092 / 40,315 — **설정값에서 정확히** | 29.5–32.0K (11회) — Claude Code 자체 추정의 여유분 때문에 **약 25% 이르게** |
+| 압축 | 4회(400 4회 → 반응형 압축 4회), 폭주 0, API 오류 0 | 11회, 폭주 0 |
+| 비용(그중 요약 호출) | $0.118 ($0.011) | $0.130 ($0.032) |
+| 캐시 적중 | 98.0% | 94.8% |
+| reward | 0.5 | 0.5 |
+
+측정된 Claude Code + Haiku 5.5 파라미터: 압축 직후 prompt 20.6–25.4K 중 캐시 적중 13.5K(→ L0 ≈ 13.5K, Lp ≈ 7–12K),
+요약 호출 1회(m = 1)의 입력은 압축 직전 문맥 + 약 2K, 그중 93–95% 캐시 적중, 출력 O_s 3.4–5.5K.
+정적 손잡이로 L 을 정하려면 목표 L 의 약 1.3배를 설정해야 하고, 프록시 경로는 API 가 보고한 값으로 그대로 맞는다.
+
+실제 API 에서 발견해 고친 버그: 프록시가 `Accept-Encoding` 을 지운 뒤 httpx 기본값(gzip)으로 상위에 요청하고 압축된 SSE 를
+그대로 넘겨, Claude Code 가 스트림을 해석하지 못하고 매 턴 비스트리밍으로 다시 보냈다(호출 2배, usage 누락). 가짜 서버는 압축하지
+않아 스모크에서 보이지 않았다. `Accept-Encoding: identity` + 디코딩된 바이트로 중계(커밋 e25e682).
+
 ### Harbor 연동에서 확인한 것 (스모크)
 
 - 설치형 에이전트는 `termination_reason` 을 남기지 않아 Harbor 의 `same_conversation` 루프가 첫 실행 뒤 중간 채점·이어가기를 하지 않고
