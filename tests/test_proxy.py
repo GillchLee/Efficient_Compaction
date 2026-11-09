@@ -233,3 +233,30 @@ async def test_error_trigger_waits_for_min_window_turns(tmp_path):
     # turn 1 decides (prompt >= 100); turns 2 and 3 are still let through; the 4th request
     # (window now 3 turns long) gets the context-length error
     assert statuses == [200, 200, 200, 400]
+
+
+async def test_stream_reaches_client_uncompressed(tmp_path):
+    """The upstream may gzip the SSE body; the relayed stream must be plain text and still parsed."""
+    import gzip
+    seen = {}
+
+    async def gz(request: Request):
+        seen["accept_encoding"] = request.headers.get("accept-encoding")
+        ev = ('event: message_start\ndata: ' + json.dumps({"type": "message_start", "message": {"usage": {
+            "input_tokens": 5, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 995, "output_tokens": 1}}})
+              + '\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n').encode()
+        body = gzip.compress(ev)
+
+        async def gen():
+            yield body
+        return StreamingResponse(gen(), media_type="text/event-stream", headers={"content-encoding": "gzip"})
+    app, cfg = make(tmp_path, "off", mode="off")
+    cfg.transport = httpx.ASGITransport(app=Starlette(routes=[Route("/v1/messages", gz, methods=["POST"])]))
+    app = create_app(cfg)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://p") as c:
+        r = await c.post("/v1/messages", json={"model": "m", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
+                         headers={"accept-encoding": "gzip"})
+    assert seen["accept_encoding"] == "identity"
+    assert "message_start" in r.text and "content-encoding" not in r.headers
+    rec = [json.loads(l) for l in open(cfg.log_path)][-1]
+    assert rec["prompt"] == 1000 and rec["cached"] == 995

@@ -141,6 +141,9 @@ def create_app(cfg: ProxyConfig) -> Starlette:
 
     def fwd_headers(request: Request, dialect_name: str | None) -> dict:
         h = {k: v for k, v in request.headers.items() if k.lower() not in _STRIP_REQ}
+        # ask for an uncompressed body: httpx would otherwise add its own "gzip, deflate, ..."
+        # and the SSE stream (relayed after parsing) would arrive compressed
+        h["accept-encoding"] = "identity"
         if dialect_name == "anthropic" and cfg.inject_anthropic_key:
             h["x-api-key"] = cfg.inject_anthropic_key
             h.pop("authorization", None)
@@ -297,7 +300,7 @@ def create_app(cfg: ProxyConfig) -> Starlette:
             async def stream():
                 buf = b""
                 try:
-                    async for chunk in resp.aiter_raw():
+                    async for chunk in resp.aiter_bytes():   # decoded, in case the upstream compresses anyway
                         buf += chunk
                         while True:
                             i = buf.find(b"\n\n")
