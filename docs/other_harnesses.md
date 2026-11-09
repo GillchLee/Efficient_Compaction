@@ -117,8 +117,9 @@ C = (α−1)(Lp−g) + mγ(L0+Lp−g) + β·O_s 는 하네스의 **압축 1회 �
 | `optlimit/serve.py` | `python -m optlimit.serve --trigger usage --spec-file … --log …` (`--model-rewrite`: Harbor 의 claude-code 는 사용자 정의 base URL 이면 `anthropic/<id>` 를 그대로 보냄) |
 | (프록시) API 서버 측 압축 | 요청이 이미 `context_management` 의 `compact_*` trigger(Anthropic) 나 `compaction` `compact_threshold`(OpenAI Responses) 를 쓰면 그 값을 매 요청 컨트롤러의 L\*(≥ 50K) 로 바꾸고, 응답 `usage.iterations` 의 `compaction` 항목을 요약 비용으로 학습. 그런 요청이 아니면 아무것도 안 함 |
 | `optlimit/adapters/harbor_installed.py` | `OptlimitClaudeCode`, `OptlimitCodex`: `compaction:` kwargs 로 자체 임계값 설정, `resume_after_verifier_rejection()` 으로 같은 대화 이어가기(terminus-2 실험과 같은 프로토콜) |
-| `configs/make_harness_config.py` | `--limit N\|native`(정적), `--proxy-fixed N`(대조: 같은 L 을 프록시로), `--balance/--formula PRIOR --prices ROW [--learn]`. 하네스별 기본: Claude Code trigger error·최소 창 4, Codex trigger usage·최소 창 3 |
-| `scripts/run_harness_job.sh` | `# proxy:` 줄이 있으면 프록시를 띄우고 하네스를 가리키게 한 뒤 `run_job.sh` |
+| `optlimit/harnesses.py` | 하네스 프로필(에이전트 클래스, 트리거, 보고 band, 최소 창, 자체 임계값 knob, 요약 요청 표지, 기본 prior). 하네스별 상수는 여기에만 |
+| `configs/make_harness_config.py` (`make_config.py --harness` 가 위임) | `--limit N\|native`(정적), `--proxy-fixed N`(대조: 같은 L 을 프록시로), `--balance/--formula PRIOR --prices ROW [--learn]`. 하네스별 기본: Claude Code trigger error·최소 창 4, Codex trigger usage·최소 창 3 |
+| `scripts/run_harness_job.sh` | `run_job.sh` 가 `# proxy:` 줄을 보면 자동으로 부르는 내부 도우미: 프록시를 띄우고 하네스를 가리키게 한 뒤 `run_job.sh` 로 돌아감 |
 | `analysis/proxy_turns.py` | 프록시 로그 → 호출별·세션별 표(실제 prompt / cache read·write / output / 비용, 결정, 압축 수). `--job-dir` 이면 `token_turns/{turns,summary}.csv` 형식도 써서 `replay.py`·`prefill_stats.py`·`fit_priors.py` 를 그대로 쓴다 |
 | `scripts/fake_llm_upstream.py` | 키·비용 없이 트리거 경로를 확인하는 가짜 Anthropic/Responses 서버(짧은 답 + 큰 usage). `OPTLIMIT_*_UPSTREAM` 으로 프록시 뒤에 둔다 |
 | `configs/priors.json` | `claude-code-hub`, `codex-hub`, `codex-luna-hub` 행 추가 |

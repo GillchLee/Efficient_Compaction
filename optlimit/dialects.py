@@ -14,36 +14,18 @@ import hashlib
 import json
 import re
 
-# Last-user-message prefixes that identify the harness's own compaction calls
-# (not turns of the task) and the first turn after compaction.
-SUMMARY_PREFIXES = (
-    # Claude Code
-    "Your task is to create a detailed summary of the conversation so far",
-    # Terminus-2 (harbor): summary / questions / answers subagents
-    "You are about to hand off your work to another AI agent",
-    "You are picking up work from a previous AI agent on this task",
-    "The next agent has a few questions for you",
-    # cliffcompaction proxy's own summary request
-    "Summarize the conversation so far",
-    # Codex 0.150 (observed via --dump-dir, 2026-10-29)
-    "You are performing a CONTEXT CHECKPOINT COMPACTION",
-)
-WINDOW_START_PREFIXES = (
-    "This session is being continued from a previous conversation",   # Claude Code
-    "Here are the answers the other agent provided.",                 # Terminus-2 handoff
-    "Another language model started to solve this problem",           # Codex post-compaction
-)
+from .harnesses import all_summary_markers, all_summary_prefixes, all_window_start_prefixes
+
+# Request classification comes from the harness profiles (optlimit/harnesses.py): a last user
+# message that starts with a summary prefix (or contains a summary marker, e.g. Claude Code 2.1.3xx
+# appends its compaction prompt after a tool result) is that harness's own compaction call; a
+# window-start prefix marks the first request of a new window.
+SUMMARY_PREFIXES = all_summary_prefixes()
+WINDOW_START_PREFIXES = all_window_start_prefixes()
 SUMMARY_CONTAINS = (
     "compaction",
 )
-# Markers a harness appends to the *end* of the last user message (after a tool result) when it
-# asks for its compaction summary. Claude Code 2.1.3xx sends "<tool output>\nCRITICAL: Respond
-# with TEXT ONLY ... <analysis> block followed by a <summary> block.\n\nYour task is to create a
-# detailed summary of the conversation so far ...", so a prefix match misses it.
-SUMMARY_MARKERS = (
-    "Your task is to create a detailed summary of the conversation so far",
-    "You are performing a CONTEXT CHECKPOINT COMPACTION",
-)
+SUMMARY_MARKERS = all_summary_markers()
 
 
 def detect(path: str) -> str | None:

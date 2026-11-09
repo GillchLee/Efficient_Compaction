@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Write a Harbor job config for one compaction condition.
 
+Three independent choices (docs/ARCHITECTURE.md): the policy (--limit / --formula / --balance /
+--proxy-fixed), the harness (--harness terminus-2 | claude-code | codex; default terminus-2) and the
+benchmark (--benchmark lhtb1 | lhtb2 | tb4 from configs/benchmarks.yaml, or --tasks-dir / --dataset).
+Claude Code and Codex are written by configs/make_harness_config.py (same flags, plus --observe,
+--proxy-fixed, --learn, --trigger); everything below is the terminus-2 path.
+
     python configs/make_config.py --model anthropic/claude-sonnet-5-5 --limit 80000 \
         --tasks-dir ./LHTB/tasks-2.0 --tasks gdal_antimeridian_clip__01 sqlite_wal_recovery_audit__02 \
         --env docker --hours 3 [--job-name sonnet_l80k] [--out configs/sweep/sonnet_l80k.yaml]
@@ -43,7 +49,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -52,24 +57,26 @@ import yaml
 HERE = Path(__file__).resolve().parent
 
 
-def short_model(model: str) -> str:
-    m = model.split("/")[-1]
-    m = re.sub(r"^(claude|gpt)-", "", m)
-    return re.sub(r"[^a-z0-9]+", "", m.lower())[:12]
+sys.path.insert(0, str(HERE))
+from _common import add_benchmark_args, continue_env_line, resolve_benchmark, short_model  # noqa: E402
+from _common import repo_relative as _repo_relative  # noqa: E402
+
+HARNESSES = ("terminus-2", "claude-code", "codex")
 
 
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--harness", choices=HARNESSES, default="terminus-2")
+    harness = pre.parse_known_args(argv)[0].harness
+    if harness != "terminus-2":
+        import make_harness_config        # Claude Code / Codex: proxy or native-knob configs
+        return make_harness_config.main(argv)
 
-def _repo_relative(path: Path) -> str:
-    """Path as written in the yaml header: relative to the repo root when inside it."""
-    root = Path(__file__).resolve().parents[1]
-    try:
-        return str(path.resolve().relative_to(root))
-    except ValueError:
-        return str(path)
-
-def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
+    ap.add_argument("--harness", choices=HARNESSES, default="terminus-2",
+                    help="terminus-2 (in-process, this script) or claude-code / codex (make_harness_config.py)")
     ap.add_argument("--model", required=True, help="litellm model id, e.g. anthropic/claude-sonnet-5-5")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--limit", help="N tokens, or 'native'")
@@ -82,10 +89,8 @@ def main() -> int:
     ap.add_argument("--handoff", action="append", default=[], metavar="KEY=VALUE",
                     help="hand-off length targets (summary_words, min_questions, answer_words); "
                          "stock terminus-2 prompts when absent")
-    ap.add_argument("--tasks-dir", default="./LHTB/tasks-2.0")
-    ap.add_argument("--tasks", nargs="*", default=[], help="task directory names (default: every task)")
+    add_benchmark_args(ap)
     ap.add_argument("--env", choices=["docker", "daytona"], default="docker")
-    ap.add_argument("--hours", type=float, default=3.0, help="agent budget per task")
     ap.add_argument("--concurrent", type=int, default=1)
     ap.add_argument("--max-tokens", type=int, default=16384)
     ap.add_argument("--retries", type=int, default=6, help="litellm num_retries per call")
@@ -98,12 +103,11 @@ def main() -> int:
     ap.add_argument("--verifier-feedback", choices=["true", "false", "score"],
                     help="HB_VERIFIER_FEEDBACK (default true: binary rejection; false: outcome withheld; "
                          "score: rejection states the verifier reward)")
-    ap.add_argument("--continue-mode", choices=["same_conversation", "phases"],
-                    help="HB_CONTINUE_MODE (default same_conversation)")
     ap.add_argument("--job-name")
     ap.add_argument("--jobs-dir", default="./jobs")
     ap.add_argument("--out")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
+    dataset, hours, cont, bench = resolve_benchmark(a)
 
     if a.native_threshold is not None:
         cond, agent_kind = f"thr{a.native_threshold // 1000}k", "stock"
@@ -184,27 +188,26 @@ def main() -> int:
                 and a.limit > a.context_window - a.max_tokens - 8000:
             print(f"warning: --limit {a.limit} is above context - max_tokens - 8000 = "
                   f"{a.context_window - a.max_tokens - 8000}; terminus-2 compacts earlier", file=sys.stderr)
-    agent.update({"model_name": a.model, "override_timeout_sec": int(a.hours * 3600), "kwargs": kwargs})
+    agent.update({"model_name": a.model, "override_timeout_sec": int(hours * 3600), "kwargs": kwargs})
     env_lines = []
     if a.verifier_feedback:
         env_lines.append(f"HB_VERIFIER_FEEDBACK={a.verifier_feedback}")
-    if a.continue_mode:
-        env_lines.append("HB_CONTINUE_MODE=" + ("same_conversation" if a.continue_mode == "same_conversation" else ""))
+    # run_job.sh defaults to same_conversation: record the mode only when it was asked for or the
+    # benchmark preset differs (tb4: phases)
+    if a.continue_mode or (cont and cont != "same_conversation"):
+        env_lines.append(continue_env_line(cont))
 
     env: dict = {"type": a.env, "force_build": False, "delete": True}
     if a.env == "daytona":
-        env["kwargs"] = {"auto_stop_interval_mins": int(a.hours * 60) + 60, "auto_delete_interval_mins": 30}
+        env["kwargs"] = {"auto_stop_interval_mins": int(hours * 60) + 60, "auto_delete_interval_mins": 30}
 
-    dataset: dict = {"path": a.tasks_dir}
-    if a.tasks:
-        dataset["task_names"] = a.tasks
     cfg = {
         "job_name": job, "jobs_dir": a.jobs_dir, "n_attempts": 1,
         "n_concurrent_trials": a.concurrent, "timeout_multiplier": 1.0,
         "environment": env, "agents": [agent], "datasets": [dataset],
     }
     header = (f"# generated by configs/make_config.py: model={a.model} condition={cond} env={a.env} "
-              f"budget={a.hours}h tasks={a.tasks or 'all'}"
+              f"benchmark={bench} budget={hours}h tasks={a.tasks or 'all'}"
               + (f" handoff={','.join(a.handoff)}" if a.handoff else "")
               + (f" api_base={a.api_base}" if a.api_base else "") + "\n"
               + (f"# env: {' '.join(env_lines)}\n" if env_lines else "")

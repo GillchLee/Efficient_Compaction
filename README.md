@@ -227,12 +227,15 @@ Codex 는 보고 usage 를 신호값으로 바꾸고(trigger usage), Claude Code
 
 ```bash
 uv pip install -e '.[proxy]'
-python configs/make_harness_config.py --harness codex --model openai/gpt-6-luna \
-    --balance codex-luna-hub --prices gpt-6-luna --learn --tasks seismo_cross_correlation_lag__01 --hours 3
-python configs/make_harness_config.py --harness claude-code --model anthropic/claude-haiku-5-5 --limit 87k ...
-bash scripts/run_harness_job.sh configs/sweep/<job>.yaml          # 프록시를 띄우고 run_job.sh
+# 하네스(--harness)·정책(--limit/--balance/--formula/--proxy-fixed)·벤치마크(--benchmark) 는 서로 독립인 축
+python configs/make_config.py --harness codex --model openai/gpt-6-luna \
+    --balance --prices gpt-6-luna --learn --benchmark lhtb2 --tasks seismo_cross_correlation_lag__01
+python configs/make_config.py --harness claude-code --model anthropic/claude-haiku-5-5 --limit 87k --benchmark tb4 --tasks ...
+bash scripts/run_job.sh configs/sweep/<job>.yaml   # # proxy: 줄이 있으면 프록시를 먼저 띄움
 python analysis/proxy_turns.py jobs/logs/<job>.proxy.jsonl --prices gpt-6-luna --job-dir jobs/<job>-proxy
 ```
+
+구조(세 축과 각 축을 담당하는 파일, 새 하네스·벤치마크 추가 방법)는 `docs/ARCHITECTURE.md`.
 
 ## 비용 모델 파라미터와 리플레이
 

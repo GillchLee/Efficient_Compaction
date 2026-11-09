@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Run a Claude Code / Codex job made by configs/make_harness_config.py.
+# Proxy launcher for Claude Code / Codex jobs. scripts/run_job.sh calls this automatically when a
+# config has a `# proxy:` line, so `bash scripts/run_job.sh <config>` is the one entry point;
+# running this script directly still works:
 #
 #   bash scripts/run_harness_job.sh configs/sweep/<job>.yaml
 #   nohup caffeinate -ims bash scripts/run_harness_job.sh configs/sweep/<job>.yaml > /dev/null 2>&1 &   # macOS
@@ -90,7 +92,7 @@ echo "$(date '+%F %T') optlimit proxy pid $PROXY_PID on :$PORT (trigger $TRIGGER
   | tee -a "jobs/logs/$JOB_NAME.log"
 
 status=0
-bash scripts/run_job.sh "$CONFIG" || status=$?
+OPTLIMIT_PROXY_ACTIVE=1 bash scripts/run_job.sh "$CONFIG" || status=$?
 if [[ -f analysis/proxy_turns.py ]]; then
   python analysis/proxy_turns.py "jobs/logs/$JOB_NAME.proxy.jsonl" --prices-from "$SPEC_FILE" || true
 fi

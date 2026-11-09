@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run (or resume) one Harbor job from a config.
+# Run (or resume) one Harbor job from a config (any harness, any benchmark).
 #
 #   bash scripts/run_job.sh configs/sweep/<job>.yaml
 #   setsid nohup bash scripts/run_job.sh configs/sweep/<job>.yaml > /dev/null 2>&1 &   # detached (Linux)
@@ -14,6 +14,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONFIG=${1:?usage: run_job.sh <config.yaml>}
+
+# Claude Code / Codex configs carry a `# proxy:` line: start the optlimit proxy first
+# (scripts/run_harness_job.sh comes back here with OPTLIMIT_PROXY_ACTIVE=1).
+if [[ -z "${OPTLIMIT_PROXY_ACTIVE:-}" ]] && grep -q '^# proxy:' "$CONFIG"; then
+  exec bash scripts/run_harness_job.sh "$CONFIG"
+fi
 JOB_NAME=$(sed -n 's/^job_name: *//p' "$CONFIG")
 JOB_DIR=jobs/$JOB_NAME
 LOG=jobs/logs/$JOB_NAME.log

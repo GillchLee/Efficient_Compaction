@@ -1,0 +1,30 @@
+# Benchmark presets for configs/make_config.py --benchmark NAME (docs/ARCHITECTURE.md, benchmark axis).
+#
+#   tasks_dir: local Harbor task directory (relative to the repo root)
+#   dataset:   Harbor Hub dataset "org/name@version" (Harbor downloads it at run time)
+#   hours:     default agent budget per task (override_timeout_sec); --hours wins
+#   continue_mode: same_conversation | phases. Only matters for tasks with continue_until_timeout
+#              (LHTB): the verifier rejection is appended to the same chat, or a new chat per phase.
+#   proxy_tasks: how many tasks a proxy harness (Claude Code, Codex) can run: the task container must
+#              reach the proxy on the host, so allow_internet = false tasks are out.
+
+lhtb1:
+  description: Long-Horizon Terminal-Bench 1.0 (46 tasks, LHTB/tasks)
+  tasks_dir: ./LHTB/tasks
+  hours: 3
+  continue_mode: same_conversation
+  proxy_tasks: 24 of 46 (allow_internet = true)
+
+lhtb2:
+  description: LHTB 2.0 reconstruction tasks (31 tasks, LHTB/tasks-2.0)
+  tasks_dir: ./LHTB/tasks-2.0
+  hours: 3
+  continue_mode: same_conversation
+  proxy_tasks: 30 of 31
+
+tb4:
+  description: Terminal-Bench 4.0 (66 tasks, Harbor Hub; 8 h per task, single run, separate verifier)
+  dataset: terminal-bench/terminal-bench@4.0.0
+  hours: 8
+  continue_mode: phases
+  proxy_tasks: 64 of 66; 3 tasks need an H100, 11 are multi-container, memory up to 32 GB
