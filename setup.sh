@@ -58,12 +58,12 @@ for PATCH in "$PATCH_DIR"/[0-9][0-9]-*.patch; do
   fi
 done
 
-# 3. venv: patched Harbor (+ Daytona SDK), optlimit (this repo), pytest
+# 3. venv: patched Harbor (+ Daytona SDK), optlimit with the proxy extra (Claude Code / Codex), pytest
 cd "$HERE"
 if [[ ! -d .venv ]]; then
   uv venv -p "$PY" .venv
 fi
-uv pip install --python .venv/bin/python -e "$LHTB_DIR/harbor[daytona]" -e . pytest pytest-asyncio
+uv pip install --python .venv/bin/python -e "$LHTB_DIR/harbor[daytona]" -e ".[proxy]" pytest pytest-asyncio
 
 # 4. Secrets file (never committed)
 if [[ ! -f .env ]]; then
