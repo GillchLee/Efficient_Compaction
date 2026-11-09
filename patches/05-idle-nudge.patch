@@ -1,0 +1,217 @@
+--- a/harbor/src/harbor/agents/terminus_2/terminus_2.py
++++ b/harbor/src/harbor/agents/terminus_2/terminus_2.py
+@@ -1,3 +1,4 @@
++import os
+ import copy
+ import shlex
+ import time
+@@ -495,6 +496,125 @@
+                 f"Unknown parser_name: {self._parser_name}. Use 'json' or 'xml'."
+             )
+ 
++    _idle_empty_turns: int = 0
++
++    @staticmethod
++    def _idle_nudge_threshold() -> int:
++        """HB_IDLE_NUDGE: consecutive no-command turns before the nudge is appended (0/unset = off)."""
++        try:
++            return max(0, int(os.environ.get("HB_IDLE_NUDGE", "0") or 0))
++        except ValueError:
++            return 0
++
++    def _idle_nudge(self, commands) -> str | None:
++        """Count consecutive responses without commands (and without task_complete) and, once
++        HB_IDLE_NUDGE is reached, return the text appended to the observation."""
++        if commands:
++            self._idle_empty_turns = 0
++            return None
++        self._idle_empty_turns += 1
++        n = self._idle_nudge_threshold()
++        if n <= 0 or self._idle_empty_turns < n:
++            return None
++        return (
++            "NOTICE: There is no human operator in this session. Nobody will answer "
++            "questions, read status reports, grant permissions, or supply missing files or "
++            f"inputs. You have now sent {self._idle_empty_turns} consecutive responses with "
++            "no commands, and the task is not finished until the verifier accepts it. Do not "
++            "stop or wait. If the task seems impossible under its constraints, re-check your "
++            "assumptions and try a different approach (inspect the environment again, test a "
++            "hypothesis, look for other sources of the needed data or behaviour). Every "
++            "response must contain at least one command, or set task_complete to true to "
++            "submit the best solution you have so far."
++        )
++
++    @staticmethod
++    def _no_human_note() -> str:
++        """HB_NO_HUMAN_NOTE=1: standing note appended to the initial prompt (unset = stock prompt)."""
++        if os.environ.get("HB_NO_HUMAN_NOTE", "0").strip().lower() not in ("1", "true", "yes"):
++            return ""
++        return (
++            "\n\nIMPORTANT: You are operating fully autonomously. There is no human in the loop: "
++            "nobody will read status reports, answer questions, grant permissions, or provide "
++            "files or other inputs, and the session only ends when you set task_complete to "
++            "true or the time budget runs out. Every response must therefore contain at least "
++            "one command, or set task_complete to true. Never reply with an empty command list "
++            "to wait for input or to report a blocker. If the task seems impossible under its "
++            "constraints, re-check your assumptions and try alternative approaches; once you "
++            "have exhausted them, submit the best solution you have with task_complete true."
++        )
++
++    _after_rejection: bool = False
++    _cmds_since_verify: int = 0
++    _last_verify_monotonic: float | None = None
++
++    @staticmethod
++    def _resubmit_guard_on() -> bool:
++        """HB_RESUBMIT_GUARD=1: block task_complete when no command ran since the last rejection."""
++        return os.environ.get("HB_RESUBMIT_GUARD", "0").strip().lower() in ("1", "true", "yes")
++
++    @staticmethod
++    def _verify_min_interval() -> float:
++        """HB_VERIFY_MIN_INTERVAL_SEC: minimum seconds between interim verifications (0/unset = off)."""
++        try:
++            return max(0.0, float(os.environ.get("HB_VERIFY_MIN_INTERVAL_SEC", "0") or 0))
++        except ValueError:
++            return 0.0
++
++    def _seconds_since_verify(self) -> float | None:
++        if self._last_verify_monotonic is None:
++            return None
++        return time.monotonic() - self._last_verify_monotonic
++
++    def _resubmit_blocked(self, is_task_complete: bool) -> str | None:
++        """Why this task_complete must not reach the verifier, or None. Only after a rejected
++        verification: "unchanged" (HB_RESUBMIT_GUARD and no command since the rejection) or
++        "interval" (HB_VERIFY_MIN_INTERVAL_SEC not yet elapsed since the last verification)."""
++        if not is_task_complete or not self._after_rejection:
++            return None
++        if self._resubmit_guard_on() and self._cmds_since_verify == 0:
++            return "unchanged"
++        since = self._seconds_since_verify()
++        if since is not None and since < self._verify_min_interval():
++            return "interval"
++        return None
++
++    _noop_turns: int = 0
++
++    @staticmethod
++    def _giveup_after() -> int:
++        """HB_GIVEUP_AFTER: consecutive no-command turns after a rejection that end the run (0/unset = off)."""
++        try:
++            return max(0, int(os.environ.get("HB_GIVEUP_AFTER", "0") or 0))
++        except ValueError:
++            return 0
++
++    def _gave_up(self) -> bool:
++        n = self._giveup_after()
++        return bool(n > 0 and self._after_rejection and self._noop_turns >= n)
++
++    def _resubmit_block_notice(self, reason: str) -> str:
++        if reason == "interval":
++            wait = int(self._verify_min_interval() - (self._seconds_since_verify() or 0.0))
++            head = (
++                "NOTICE: This submission was not sent to the verifier. The verifier runs at most "
++                f"once every {int(self._verify_min_interval())} seconds per session and last ran "
++                f"{int(self._seconds_since_verify() or 0)} seconds ago; it becomes available again "
++                f"in about {max(wait, 1)} seconds. Resubmitting before then is pointless."
++            )
++        else:
++            head = (
++                "NOTICE: This submission was not sent to the verifier because nothing has changed "
++                "since the previous rejected verification: you have executed no commands since "
++                "then, so the result would be identical."
++            )
++        return (
++            f"{head} Do not resubmit the same state and do not idle. Use the time to re-read the "
++            "task description, check every requirement against your actual files and outputs, "
++            "test edge cases, and look for details you may have missed; then fix what you find "
++            "and submit again."
++        )
++
+     def _get_completion_confirmation_message(self, terminal_output: str) -> str:
+         """Return the format-specific task completion confirmation message."""
+         if self._parser_name == "json":
+@@ -1503,11 +1623,23 @@
+                     (time.perf_counter() - terminal_started) * 1000
+                 )
+ 
++            # HB_RESUBMIT_GUARD=1: a task_complete after a rejected verification is only
++            # accepted once at least one command has run since that rejection.
++            if commands:
++                self._cmds_since_verify += 1
++                self._noop_turns = 0
++            else:
++                self._noop_turns += 1
++            blocked = self._resubmit_blocked(is_task_complete)  # None | "unchanged" | "interval"
++            if blocked:
++                is_task_complete = False
++
+             # Capture the pending completion state before potentially modifying it
+             was_pending_completion = self._pending_completion
+ 
+             # Construct the observation (what gets sent back to the LLM)
+             if is_task_complete:
++                self._idle_empty_turns = 0
+                 if self._pending_completion:
+                     observation = terminal_output
+                 else:
+@@ -1524,6 +1656,14 @@
+                     )
+                 else:
+                     observation = self._limit_output_length(terminal_output)
++                # HB_IDLE_NUDGE=N: after N consecutive responses with no commands and no
++                # task_complete, tell the model that nobody will answer and that it must keep
++                # working or submit (opt-in; unset = stock behaviour).
++                nudge = self._idle_nudge(commands)
++                if blocked:
++                    observation = f"{observation}\n\n{self._resubmit_block_notice(blocked)}"
++                elif nudge:
++                    observation = f"{observation}\n\n{nudge}"
+ 
+             # Record the step in trajectory
+             cache_tokens_used = chat.total_cache_tokens - tokens_before_cache
+@@ -1664,6 +1804,13 @@
+                     prompt = observation
+                     continue
+ 
++            # HB_GIVEUP_AFTER=N: after a rejected verification, N consecutive turns without a
++            # command (blocked resubmissions or empty turns) end the run; the trial loop then
++            # runs the final verifier instead of feeding the loop until the time budget.
++            if self._gave_up():
++                self._termination_reason = "gave_up"
++                return
++
+             prompt = observation
+         self._termination_reason = "max_turns"
+ 
+@@ -1683,6 +1830,11 @@
+         self._pending_subagent_refs = None
+         self._pending_handoff_prompt = None
+         self._timestamped_markers = []
++        self._idle_empty_turns = 0
++        self._after_rejection = False
++        self._cmds_since_verify = 0
++        self._last_verify_monotonic = None
++        self._noop_turns = 0
+         self._session_id = self._user_provided_session_id or str(uuid.uuid4())
+         self._original_instruction = ""
+         self._termination_reason = None
+@@ -1790,6 +1942,8 @@
+             instruction=augmented_instruction,
+             terminal_state=terminal_state,
+         )
++        # HB_NO_HUMAN_NOTE=1: standing autonomy note (opt-in; unset = stock prompt).
++        initial_prompt += self._no_human_note()
+ 
+         self._trajectory_steps.append(
+             Step(
+@@ -1832,6 +1986,9 @@
+         self._pending_handoff_prompt = None
+         self._termination_reason = None
+         self._continuation_count += 1
++        self._after_rejection = True   # HB_RESUBMIT_GUARD / HB_VERIFY_MIN_INTERVAL_SEC bookkeeping
++        self._cmds_since_verify = 0
++        self._last_verify_monotonic = time.monotonic()
+         self._trajectory_steps.append(
+             Step(
+                 step_id=len(self._trajectory_steps) + 1,
