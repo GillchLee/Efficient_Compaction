@@ -58,6 +58,17 @@ def claude_code_compaction_env(limit: int | None = None, window: int | None = No
     return env
 
 
+def _options_with_compaction(base):
+    """Harbor >= 0.20 validates agent kwargs against a pydantic ``options_model`` (extra = forbid),
+    also in a preflight before the constructor runs, so the ``compaction`` kwarg has to be declared
+    there. Older Harbor (the LHTB fork) has no options_model and takes any kwarg."""
+    model = getattr(base, "options_model", None)
+    if model is None:
+        return None
+    return type(f"Optlimit{model.__name__}", (model,),
+                {"__annotations__": {"compaction": dict | None}, "compaction": None, "__module__": __name__})
+
+
 def _mark_completed(context) -> None:
     """A CLI run that returned normally is the agent declaring the task done. Harbor's
     continue-until-timeout loop (same_conversation) runs the interim verifier - and resumes on a
@@ -78,6 +89,9 @@ class OptlimitClaudeCode(ClaudeCode):
                                           omit for Claude Code's default (~model window)
     Other kwargs are the stock claude-code ones (extra_env, max_turns, ...).
     """
+
+    if getattr(ClaudeCode, "options_model", None) is not None:
+        options_model = _options_with_compaction(ClaudeCode)
 
     def __init__(self, logs_dir: Path, *args, compaction: dict | None = None, **kwargs):
         compaction = dict(compaction or {})
@@ -142,6 +156,9 @@ class OptlimitCodex(Codex):
     Resume runs `codex exec <flags> resume --last -- <prompt>` after restoring the session
     rollouts that the stock agent copies to /logs/agent/sessions and then deletes from CODEX_HOME.
     """
+
+    if getattr(Codex, "options_model", None) is not None:
+        options_model = _options_with_compaction(Codex)
 
     def __init__(self, logs_dir: Path, *args, compaction: dict | None = None, **kwargs):
         compaction = dict(compaction or {})

@@ -1,7 +1,7 @@
 [project]
 name = "optlimit"
 version = "0.1.0"
-description = "Cost-optimal compaction threshold for terminus-2 on LHTB: cost model, online g estimator, in-process trigger (harbor_agent)"
+description = "Cost-optimal compaction timing for agent harnesses (terminus-2 in-process; Claude Code, Codex and stock terminus-2 behind a proxy): cost model, online estimator, controller"
 requires-python = ">=3.11"
 dependencies = [
     "pyyaml>=6",

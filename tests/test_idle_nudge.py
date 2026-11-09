@@ -2,6 +2,9 @@
 import pytest
 
 harbor = pytest.importorskip("harbor")
+from _profiles import needs_lhtb_fork  # noqa: E402
+
+pytestmark = needs_lhtb_fork
 from harbor.agents.terminus_2.terminus_2 import Terminus2  # noqa: E402
 
 

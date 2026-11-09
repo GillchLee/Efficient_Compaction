@@ -24,8 +24,17 @@ JOB_NAME=$(sed -n 's/^job_name: *//p' "$CONFIG")
 JOB_DIR=jobs/$JOB_NAME
 LOG=jobs/logs/$JOB_NAME.log
 
-# shellcheck disable=SC1091
-source .venv/bin/activate
+# Environment profile: a `# harbor: 0.25` line (benchmarks that need stock Harbor) selects ./.venv-h25,
+# everything else the patched LHTB fork in ./.venv (setup.sh --profile).
+VENV=.venv
+case "$(sed -n 's/^# harbor: *//p' "$CONFIG" | head -1)" in
+  ""|lhtb-fork) ;;
+  0.25*) VENV=.venv-h25 ;;
+  *) echo "unknown '# harbor:' profile in $CONFIG" >&2; exit 1 ;;
+esac
+[[ -f $VENV/bin/activate ]] || { echo "missing $VENV: bash setup.sh --profile $([[ $VENV == .venv ]] && echo lhtb || echo harbor25)" >&2; exit 1; }
+# shellcheck disable=SC1090,SC1091
+source "$VENV/bin/activate"
 if [[ -f .env ]]; then
   set -a
   # shellcheck disable=SC1091
@@ -150,9 +159,11 @@ status=0
 if [[ -f "$JOB_DIR/config.json" ]]; then
   harbor jobs resume -p "$JOB_DIR" >>"$LOG" 2>&1 || status=$?
 else
-  harbor run -c "$CONFIG" >>"$LOG" 2>&1 || status=$?
+  # HARBOR_EXTRA_ARGS: run_harness_job.sh allowlists the proxy host for the agent (Harbor >= 0.20)
+  # shellcheck disable=SC2086
+  harbor run -c "$CONFIG" ${HARBOR_EXTRA_ARGS:-} >>"$LOG" 2>&1 || status=$?
 fi
 echo "$(date '+%F %T') finished $JOB_NAME (exit $status)" | tee -a "$LOG"
 
-python analysis/token_turns.py "$JOB_DIR"
+python analysis/token_turns.py "$JOB_DIR" || true   # terminus-2 trajectories only; proxy jobs use analysis/proxy_turns.py
 exit "$status"

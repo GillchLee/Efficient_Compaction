@@ -22,6 +22,7 @@ class HarnessProfile:
     trigger: str | None = None        # how the proxy makes the harness compact: "usage" | "error"
     band: dict = field(default_factory=dict)   # low_cap / high / limit_max (tokens)
     native_band: dict = field(default_factory=dict)  # harness threshold inside the band (proxy mode)
+    agent_kwargs: dict = field(default_factory=dict)  # fixed agent kwargs (harnesses without a `compaction:` kwarg)
     min_window_turns: int = 3         # proxy-side guard: turns a window lasts before the next compaction
     # request classification (proxy) -------------------------------------------------------------
     summary_prefixes: tuple[str, ...] = ()     # last user message starts with: the harness's compaction call
@@ -40,7 +41,17 @@ class HarnessProfile:
             return {"compaction": {"limit": int(limit)}}
         if self.name == "codex":
             return {"compaction": {"limit": int(limit)}}
+        if self.name == "terminus-2-proxy":
+            raise ValueError("a static limit for terminus-2 needs the in-process adapter (--harness terminus-2 on "
+                             "the lhtb-fork profile); behind the proxy use --proxy-fixed N")
         raise KeyError(self.name)
+
+    def proxy_kwargs(self) -> dict:
+        """Agent kwargs in proxy mode: the harness's own threshold parked high inside the band, so
+        only the proxy decides."""
+        if self.agent_kwargs:
+            return {k: (dict(v) if isinstance(v, dict) else v) for k, v in self.agent_kwargs.items()}
+        return {"compaction": dict(self.native_band)}
 
 
 PROFILES: dict[str, HarnessProfile] = {
@@ -56,6 +67,31 @@ PROFILES: dict[str, HarnessProfile] = {
         window_start_prefixes=("Here are the answers the other agent provided.",),
         default_prior="terminus2-gpt-6-luna",
         notes="summary + questions + answers (m ~ 2.2); the adapter calls _summarize() directly",
+    ),
+    # Stock terminus-2 (any Harbor, no patches) with its LLM calls routed through the proxy: a
+    # "prompt is too long" 400 raises ContextLengthExceededError and terminus-2 runs its own
+    # three-call hand-off (enable_summarize). Used where the in-process adapter is unavailable
+    # (Harbor 0.25 profile). The questions call starts from an empty history, so the proxy sees it
+    # as its own session: its cost is in the log but not in the main session's learned C.
+    "terminus-2-proxy": HarnessProfile(
+        name="terminus-2-proxy",
+        agent={"name": "terminus-2"},
+        connection="proxy",
+        trigger="error",
+        band={"low_cap": 50_000, "high": 950_000, "limit_max": 180_000},
+        native_band={"window": 200_000},      # terminus-2's own trigger stays at the model window
+        agent_kwargs={"parser_name": "json", "enable_summarize": True, "proactive_summarization_threshold": 8000,
+                      "record_terminal_session": True, "llm_call_kwargs": {"max_tokens": 16384, "num_retries": 6}},
+        min_window_turns=3,
+        summary_prefixes=(
+            "You are about to hand off your work to another AI agent",
+            "You are picking up work from a previous AI agent on this task",
+            "The next agent has a few questions for you",
+        ),
+        summary_markers=("You are about to hand off your work to another AI agent",),
+        window_start_prefixes=("Here are the answers the other agent provided.",),
+        default_prior="terminus2-claude-haiku-5-5",
+        notes="stock terminus-2 behind the proxy (trigger=error); summary + questions + answers (m ~ 2.2)",
     ),
     "claude-code": HarnessProfile(
         name="claude-code",

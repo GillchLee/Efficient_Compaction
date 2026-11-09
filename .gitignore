@@ -9,5 +9,6 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 .lhtb_clone.log
-data/tb4_src/
-data/tb4/
+data/
+.venv-h25/
+setup*.log

@@ -12,6 +12,8 @@ import yaml
 HERE = Path(__file__).resolve().parent
 DEFAULT_BENCHMARK = "lhtb2"      # what --tasks-dir defaulted to before presets existed
 DEFAULT_HOURS = 3.0
+DEFAULT_HARBOR = "lhtb-fork"     # environment profile (setup.sh --profile): venv per Harbor base
+HARBOR_PROFILES = {"lhtb-fork": ".venv", "0.25": ".venv-h25"}
 
 
 def load_benchmarks() -> dict:
@@ -28,6 +30,8 @@ def add_benchmark_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--hours", type=float, help="agent budget per task (default: the benchmark's, else 3)")
     ap.add_argument("--continue-mode", choices=["same_conversation", "phases"],
                     help="for continue_until_timeout tasks (default: the benchmark's)")
+    ap.add_argument("--harbor", choices=sorted(HARBOR_PROFILES),
+                    help=f"environment profile (default: the benchmark's, else {DEFAULT_HARBOR}); see setup.sh --profile")
 
 
 def dataset_spec(text: str) -> dict:
@@ -56,6 +60,22 @@ def resolve_benchmark(a: argparse.Namespace) -> tuple[dict, float, str | None, s
     hours = a.hours if a.hours is not None else float(preset.get("hours", DEFAULT_HOURS))
     cont = a.continue_mode or preset.get("continue_mode")
     return dataset, hours, cont, label
+
+
+def benchmark_extras(a: argparse.Namespace) -> tuple[str, dict]:
+    """-> (harbor profile, {harness name: agent kwargs the benchmark's protocol asks for})."""
+    preset: dict = {}
+    if not a.tasks_dir and not a.dataset:
+        preset = load_benchmarks()[a.benchmark or DEFAULT_BENCHMARK]
+    harbor = getattr(a, "harbor", None) or str(preset.get("harbor", DEFAULT_HARBOR))
+    if harbor not in HARBOR_PROFILES:
+        raise SystemExit(f"benchmarks.yaml: unknown harbor profile {harbor!r} (known: {', '.join(HARBOR_PROFILES)})")
+    return harbor, dict(preset.get("harness_kwargs") or {})
+
+
+def harbor_header_line(harbor: str) -> str:
+    """`# harbor:` line for the job yaml (read by scripts/run_job.sh); empty for the default profile."""
+    return "" if harbor == DEFAULT_HARBOR else f"# harbor: {harbor}\n"
 
 
 def continue_env_line(mode: str | None) -> str | None:

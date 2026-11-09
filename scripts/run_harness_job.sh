@@ -30,8 +30,12 @@ if [[ -z "$PROXY_JSON" ]]; then
   exec bash scripts/run_job.sh "$CONFIG"
 fi
 
-# shellcheck disable=SC1091
-source .venv/bin/activate
+VENV=.venv
+HARBOR_PROFILE=$(sed -n 's/^# harbor: *//p' "$CONFIG" | head -1)
+case "$HARBOR_PROFILE" in 0.25*) VENV=.venv-h25 ;; esac
+[[ -f $VENV/bin/activate ]] || { echo "missing $VENV: see setup.sh --profile" >&2; exit 1; }
+# shellcheck disable=SC1090,SC1091
+source "$VENV/bin/activate"
 if [[ -f .env ]]; then
   set -a
   # shellcheck disable=SC1091
@@ -74,10 +78,15 @@ ARGS=(--host 0.0.0.0 --port "$PORT" --trigger "$TRIGGER" --spec-file "$SPEC_FILE
 [[ -n "${OPTLIMIT_PROXY_DUMP:-}" ]] && ARGS+=(--dump-dir "jobs/logs/$JOB_NAME.dumps")
 case "$MODEL" in
   anthropic/*) ARGS+=(--model-rewrite "$MODEL=${MODEL#anthropic/}")
-               export ANTHROPIC_BASE_URL="http://$HOST:$PORT" ;;
+               export ANTHROPIC_BASE_URL="http://$HOST:$PORT"
+               # host-side harnesses (stock terminus-2 through litellm) read this name
+               export ANTHROPIC_API_BASE="http://$HOST:$PORT" ;;
   openai/*)    export OPENAI_BASE_URL="http://$HOST:$PORT/v1" ;;
   *) echo "run_harness_job: unsupported model prefix in $MODEL" >&2; exit 1 ;;
 esac
+
+# Harbor >= 0.20 enforces per-task egress allowlists: let the agent container reach the proxy.
+case "$HARBOR_PROFILE" in 0.25*) export HARBOR_EXTRA_ARGS="${HARBOR_EXTRA_ARGS:-} --allow-agent-host $HOST" ;; esac
 
 python -m optlimit.serve "${ARGS[@]}" >>"jobs/logs/$JOB_NAME.proxy.out" 2>&1 &
 PROXY_PID=$!

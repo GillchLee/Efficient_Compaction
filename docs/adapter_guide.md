@@ -26,7 +26,7 @@
 ## 새 harness 에 붙일 때 확인할 것
 
 1. **usage 를 어디서 얻나.** 대부분의 harness 는 응답 객체에서 usage 를 버립니다. Harbor 는 그래서
-   `patches/01-usage-tracking.patch` 로 `Chat.last_usage` 를 추가했습니다. 다른 harness 에서는 클라이언트
+   `patches/lhtb-7ca0cac/01-usage-tracking.patch` 로 `Chat.last_usage` 를 추가했습니다. 다른 harness 에서는 클라이언트
    래퍼에서 마지막 응답의 usage 를 보관하면 됩니다.
 2. **cache read 가 보고되나.** Anthropic `cache_read_input_tokens`, OpenAI/vLLM
    `prompt_tokens_details.cached_tokens`. vLLM 은 `--enable-prefix-caching` 일 때만 옵니다. 없으면

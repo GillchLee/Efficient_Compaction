@@ -58,10 +58,11 @@ HERE = Path(__file__).resolve().parent
 
 
 sys.path.insert(0, str(HERE))
-from _common import add_benchmark_args, continue_env_line, resolve_benchmark, short_model  # noqa: E402
+from _common import DEFAULT_HARBOR, add_benchmark_args, benchmark_extras, continue_env_line  # noqa: E402
+from _common import resolve_benchmark, short_model  # noqa: E402
 from _common import repo_relative as _repo_relative  # noqa: E402
 
-HARNESSES = ("terminus-2", "claude-code", "codex")
+HARNESSES = ("terminus-2", "terminus-2-proxy", "claude-code", "codex")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -113,6 +114,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out")
     a = ap.parse_args(argv)
     dataset, hours, cont, bench = resolve_benchmark(a)
+    harbor, _ = benchmark_extras(a)
+    if harbor != DEFAULT_HARBOR:
+        ap.error(f"benchmark {bench!r} runs on the Harbor {harbor} profile, where the in-process terminus-2 adapter "
+                 "(patched LHTB fork) is not available: use --harness terminus-2-proxy | claude-code | codex")
 
     if a.native_threshold is not None:
         cond, agent_kind = f"thr{a.native_threshold // 1000}k", "stock"

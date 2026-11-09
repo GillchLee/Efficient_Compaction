@@ -7,6 +7,12 @@
 #              (LHTB): the verifier rejection is appended to the same chat, or a new chat per phase.
 #   proxy_tasks: how many tasks a proxy harness (Claude Code, Codex) can run: the task container must
 #              reach the proxy on the host, so allow_internet = false tasks are out.
+#   harbor:    environment profile the tasks need (setup.sh --profile): lhtb-fork (default; LHTB's
+#              Harbor 0.7 fork + patches/lhtb-7ca0cac, ./.venv) or "0.25" (stock Harbor, ./.venv-h25;
+#              tasks that use agent network allowlists, gpu_types, restore paths, verifier images).
+#              In-process terminus-2 (optlimit.harbor_agent) exists only on lhtb-fork; on "0.25" use
+#              --harness terminus-2-proxy | claude-code | codex.
+#   harness_kwargs: per-harness agent kwargs the benchmark's official protocol asks for.
 
 lhtb1:
   description: Long-Horizon Terminal-Bench 1.0 (46 tasks, LHTB/tasks)
@@ -14,6 +20,7 @@ lhtb1:
   hours: 3
   continue_mode: same_conversation
   proxy_tasks: 24 of 46 (allow_internet = true)
+  harbor: lhtb-fork
 
 lhtb2:
   description: LHTB 2.0 reconstruction tasks (31 tasks, LHTB/tasks-2.0)
@@ -21,6 +28,7 @@ lhtb2:
   hours: 3
   continue_mode: same_conversation
   proxy_tasks: 30 of 31
+  harbor: lhtb-fork
 
 tb4:
   description: Terminal-Bench 4.0 (66 tasks, Harbor Hub; 8 h per task, single run, separate verifier)
@@ -28,3 +36,22 @@ tb4:
   hours: 8
   continue_mode: phases
   proxy_tasks: 64 of 66; 3 tasks need an H100, 11 are multi-container, memory up to 32 GB
+  harbor: lhtb-fork
+
+swe_marathon:
+  description: SWE-Marathon (20 ultra-long-horizon tasks; git clone --depth 1 https://github.com/abundant-ai/swe-marathon data/swe-marathon)
+  tasks_dir: ./data/swe-marathon/tasks
+  hours: 5            # task.toml budgets are 4-10 h (official runs: Modal sandboxes, single run)
+  continue_mode: phases
+  harbor: "0.25"
+  harness_kwargs:
+    claude-code: {disallowed_tools: "WebSearch WebFetch"}   # as in the benchmark's scripts/run-benchmark.sh
+  proxy_tasks: 20 of 20 (16 use an agent egress allowlist; run_job.sh allowlists the proxy host); 5 tasks need an H100
+
+frontier_swe_v2:
+  description: FrontierSWE v2 (34 tasks, 20 h budget; git clone --depth 1 https://github.com/Proximal-Labs/frontier-swe-v2 data/frontier-swe-v2)
+  tasks_dir: ./data/frontier-swe-v2/tasks
+  hours: 20
+  continue_mode: phases
+  harbor: "0.25"
+  proxy_tasks: tasks deny egress except allowed hosts (run_job.sh allowlists the proxy host); several need GPUs

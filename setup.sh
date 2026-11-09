@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# Rebuild the experiment workspace from scratch:
-#   ./LHTB at the pinned commit + Harbor patches (patches/NN-*.patch, in order) + ./.venv with the patched Harbor and optlimit.
+# Rebuild an experiment environment from scratch. One profile per Harbor base (they cannot share a venv):
 #
-#   bash setup.sh                 # LHTB -> ./LHTB, venv -> ./.venv
+#   bash setup.sh                       # profile lhtb: ./LHTB at the pinned commit + patches/lhtb-7ca0cac/NN-*.patch
+#                                       # (in order) + ./.venv with the patched Harbor (0.7 fork) and optlimit
+#   bash setup.sh --profile harbor25    # stock Harbor (HARBOR_VERSION, default 0.25.0) + optlimit[proxy] in ./.venv-h25:
+#                                       # benchmarks that need newer task features (SWE-Marathon, FrontierSWE v2)
+#
+# configs/benchmarks.yaml says which profile a benchmark needs (`harbor:`); make_config.py records it
+# as a `# harbor:` line and scripts/run_job.sh activates the matching venv.
 #
 # Env overrides: LHTB_URL (clone source), LHTB_DIR (default ./LHTB), PY (python for the
 # venv, default 3.12), SKIP_LFS=1 (skip `git lfs pull`; automatic when git-lfs is missing).
@@ -11,10 +16,35 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
+PROFILE=lhtb
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --profile) PROFILE=${2:?--profile lhtb|harbor25}; shift 2 ;;
+    --profile=*) PROFILE=${1#*=}; shift ;;
+    *) echo "unknown argument: $1 (usage: setup.sh [--profile lhtb|harbor25])" >&2; exit 1 ;;
+  esac
+done
+
+if [[ "$PROFILE" == harbor25 ]]; then
+  # Stock Harbor from PyPI: no LHTB checkout, no patches. Claude Code / Codex / stock terminus-2 run
+  # behind the optlimit proxy (docs/other_harnesses.md), so nothing in Harbor needs changing.
+  command -v uv >/dev/null || { echo "missing: uv" >&2; exit 1; }
+  cd "$HERE"
+  [[ -d .venv-h25 ]] || uv venv -p "${PY:-3.12}" .venv-h25
+  uv pip install --python .venv-h25/bin/python "harbor==${HARBOR_VERSION:-0.25.0}" -e ".[proxy]" pytest pytest-asyncio
+  if [[ ! -f .env ]]; then cp .env.example .env; chmod 600 .env; echo "created .env: fill in the keys"; fi
+  mkdir -p jobs/logs data
+  echo "done (profile harbor25, $(.venv-h25/bin/harbor --version 2>/dev/null | tail -1)). next e.g."
+  echo "  git clone --depth 1 https://github.com/abundant-ai/swe-marathon data/swe-marathon"
+  echo "  .venv-h25/bin/python configs/make_config.py --harness claude-code --model anthropic/claude-haiku-5-5 --proxy-fixed 40k --benchmark swe_marathon --tasks zstd-decoder --hours 1"
+  exit 0
+elif [[ "$PROFILE" != lhtb ]]; then
+  echo "unknown profile: $PROFILE (lhtb | harbor25)" >&2; exit 1
+fi
 LHTB_DIR=${LHTB_DIR:-$HERE/LHTB}
 LHTB_URL=${LHTB_URL:-https://github.com/zli12321/LHTB}
 LHTB_COMMIT=7ca0cacea9bf6a0694eaad7306bed794eaaaabce
-PATCH_DIR=$HERE/patches
+PATCH_DIR=$HERE/patches/lhtb-7ca0cac
 PY=${PY:-3.12}
 
 for cmd in git uv; do
@@ -45,7 +75,7 @@ if [[ "${SKIP_LFS:-0}" != 1 ]]; then
   git -C "$LHTB_DIR" lfs pull
 fi
 
-# 2. Harbor patches, in order (patches/NN-*.patch; each one is skipped when already applied)
+# 2. Harbor patches, in order (patches/lhtb-7ca0cac/NN-*.patch; each one is skipped when already applied)
 for PATCH in "$PATCH_DIR"/[0-9][0-9]-*.patch; do
   if git -C "$LHTB_DIR" apply --check "$PATCH" 2>/dev/null; then
     git -C "$LHTB_DIR" apply "$PATCH"

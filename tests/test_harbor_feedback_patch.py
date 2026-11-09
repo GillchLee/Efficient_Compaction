@@ -6,6 +6,9 @@ from types import SimpleNamespace
 import pytest
 
 harbor = pytest.importorskip("harbor")
+from _profiles import needs_lhtb_fork  # noqa: E402
+
+pytestmark = needs_lhtb_fork
 from harbor.trial import trial as trial_mod  # noqa: E402
 
 

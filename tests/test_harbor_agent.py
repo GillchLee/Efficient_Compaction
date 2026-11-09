@@ -8,6 +8,7 @@ import pytest
 from optlimit.controller import config_from_spec
 
 harbor = pytest.importorskip("harbor")
+from _profiles import needs_lhtb_fork  # noqa: E402
 from optlimit.harbor_agent import OptlimitTerminus2  # noqa: E402
 
 
@@ -77,6 +78,7 @@ def test_mode_off_never_compacts(tmp_path):
     assert len(recs) == 3 and all(r["limit"] is None for r in recs)
 
 
+@needs_lhtb_fork        # the prompt functions come from patches/lhtb-7ca0cac/02
 def test_handoff_budgets_change_only_the_three_prompts(tmp_path):
     stock = _agent(tmp_path, {"mode": "off"})
     sized = OptlimitTerminus2(logs_dir=tmp_path, model_name="openai/gpt-4o-mini", optlimit={"mode": "off"},

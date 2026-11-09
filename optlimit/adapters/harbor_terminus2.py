@@ -25,7 +25,7 @@ How it works. terminus-2 calls `_check_proactive_summarization()` at the start o
 episode, before the next LLM call. The stock check compares litellm's local token count of
 the chat with `proactive_summarization_threshold`. This subclass first asks the optlimit
 controller, feeding it the prompt_tokens / cache_read the API reported for the *previous*
-call (`chat.last_usage`, added by patches/01-usage-tracking.patch). When the
+call (`chat.last_usage`, added by patches/lhtb-7ca0cac/01-usage-tracking.patch). When the
 controller says "compact now" it runs terminus-2's own `_summarize()` - the same three-call
 summarization the stock agent uses - so only the moment of compaction changes. Otherwise the
 stock threshold check still runs (safety net). Every decision is appended to

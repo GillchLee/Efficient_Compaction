@@ -12,8 +12,10 @@
 기능별 디렉터리입니다. `LHTB/`(체크아웃 + 패치된 Harbor)만 외부 코드입니다.
 
 ```
-setup.sh                      작업 환경 재구성: LHTB 핀 커밋 + Harbor 패치(순서대로) + .venv
-patches/                      Harbor 패치, 번호 순서로 적용 (아래 표)
+setup.sh                      작업 환경 재구성. 프로필별(Harbor 기준별) venv:
+                                --profile lhtb(기본): LHTB 핀 커밋 + 패치(순서대로) + .venv
+                                --profile harbor25: stock Harbor 0.25 + optlimit[proxy] → .venv-h25
+patches/lhtb-7ca0cac/         LHTB 포크(Harbor 0.7)용 패치, 번호 순서로 적용 (아래 표)
   01-usage-tracking.patch     API usage 기록 (Chat.last_usage, cache write 토큰)
   02-terminus2-prompts-and-short-summary.patch
                               요약 프롬프트 함수 분리, short summary 호출 기록
@@ -21,6 +23,7 @@ patches/                      Harbor 패치, 번호 순서로 적용 (아래 표
                               제출별 중간 채점 결과를 interim_verifier.jsonl 에 기록
   04-verifier-feedback-option.patch
                               HB_VERIFIER_FEEDBACK=false|score 옵션 (채점 결과를 숨기거나 점수를 알림)
+  05-idle-nudge.patch         terminus-2 공회전 대응 옵션(HB_NO_HUMAN_NOTE, HB_IDLE_NUDGE, …; 기본 꺼짐)
 configs/
   make_config.py              모델·압축 조건·환경(docker/daytona)·과제·시간·실행 옵션을 받아 job yaml 생성
   sweep/ smoke/ examples/     생성된(또는 손으로 쓴) job 설정
@@ -70,8 +73,30 @@ vi .env                  # OPENAI_API_KEY / ANTHROPIC_API_KEY / DAYTONA_API_KEY
 `setup.sh`가 하는 일:
 
 1. LHTB를 실험에 쓴 커밋 `7ca0cacea9bf6a0694eaad7306bed794eaaaabce`으로 체크아웃합니다 (`--filter=blob:none`).
-2. `patches/NN-*.patch` 를 번호 순서로 적용합니다(이미 적용된 것은 건너뜁니다).
+2. `patches/lhtb-7ca0cac/NN-*.patch` 를 번호 순서로 적용합니다(이미 적용된 것은 건너뜁니다).
 3. `.venv`에 패치된 Harbor(`harbor[daytona]`), 이 저장소(`optlimit`), pytest 를 설치합니다.
+
+### 환경 프로필 (Harbor 기준별 venv)
+
+벤치마크마다 필요한 Harbor 가 다르고 두 버전은 한 venv 에 같이 둘 수 없어서, 프로필마다 venv 를 따로 둡니다.
+`configs/benchmarks.yaml` 의 `harbor:` 가 프로필을 정하고, 생성된 yaml 의 `# harbor:` 줄을 보고 `scripts/run_job.sh` 가 venv 를 고릅니다.
+
+| 프로필 | 설치 | venv | 벤치마크 | 쓸 수 있는 하네스 |
+|---|---|---|---|---|
+| `lhtb-fork`(기본) | `bash setup.sh` | `.venv` | `lhtb1`, `lhtb2`, `tb4` | terminus-2(in-process), claude-code, codex |
+| `0.25` | `bash setup.sh --profile harbor25` | `.venv-h25` | `swe_marathon`, `frontier_swe_v2` | terminus-2-proxy, claude-code, codex (모두 프록시) |
+
+```bash
+bash setup.sh --profile harbor25
+git clone --depth 1 https://github.com/abundant-ai/swe-marathon data/swe-marathon
+python configs/make_config.py --harness claude-code --model anthropic/claude-haiku-5-5 \
+    --proxy-fixed 40k --benchmark swe_marathon --tasks zstd-decoder --hours 1
+bash scripts/run_job.sh configs/sweep/<job>.yaml      # .venv-h25 를 켜고, 프록시 호스트를 에이전트 egress allowlist 에 넣음
+```
+
+`0.25` 프로필에는 Harbor 패치가 없습니다. Claude Code·Codex 와 stock terminus-2(`--harness terminus-2-proxy`)는 모두
+optlimit 프록시 뒤에서 돌고, terminus-2 는 `prompt is too long` 400 을 받으면 자기 3단계 hand-off 를 실행합니다.
+정확한 in-process 제어(`optlimit.harbor_agent`)는 `lhtb-fork` 프로필에만 있습니다.
 
 LHTB 안으로 복사하는 것은 없습니다. job 은 이 디렉터리에서 실행하고, 설정은 과제를 `./LHTB/tasks`(LHTB 1.0) 또는 `./LHTB/tasks-2.0`(LHTB 2.0 reconstruction 과제)로 가리킵니다.
 

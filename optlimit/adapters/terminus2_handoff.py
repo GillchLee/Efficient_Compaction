@@ -1,7 +1,7 @@
 """Hand-off prompt variants for terminus-2 (the `handoff:` block of OptlimitTerminus2).
 
 Mixin over harbor's Terminus2: every method here overrides a prompt builder that
-patches/02-terminus2-prompts-and-short-summary.patch factored out of terminus_2.py
+patches/lhtb-7ca0cac/02-terminus2-prompts-and-short-summary.patch factored out of terminus_2.py
 (_summary_prompt / _question_prompt / _answer_prompt) or replaces _summarize for the
 single-call hand-off. With an empty `handoff` block every method falls through to the
 stock prompt, so the default behaviour is unchanged.

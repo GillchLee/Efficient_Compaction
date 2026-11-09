@@ -15,7 +15,7 @@ configs/make_config.py  ── 세 축을 받아 Harbor job yaml 한 개를 쓴�
         │
 scripts/run_job.sh      ── .env, 키·환경 확인, # proxy: 가 있으면 프록시를 먼저 띄움(run_harness_job.sh), Harbor 실행/이어서 실행
         │
-Harbor (LHTB 7ca0cac + patches/01–04)
+Harbor (프로필 lhtb: LHTB 7ca0cac + patches/lhtb-7ca0cac/01–05 | 프로필 harbor25: stock 0.25)
         │  agents: optlimit.adapters.*            ← 하네스 축
         ▼
 ┌──────────────────────────────┐        ┌──────────────────────────────────────┐
@@ -70,9 +70,23 @@ Harbor (LHTB 7ca0cac + patches/01–04)
 - `scripts/run_job.sh`(한 job), `run_sweep.sh`(여러 job), `run_harness_job.sh`(프록시 기동; run_job.sh 가 필요할 때 부름)
 - `analysis/token_turns.py`(Harbor trajectory → 턴 표), `analysis/proxy_turns.py`(프록시 로그 → 같은 형식), `replay.py`, `fit_priors.py`, …
 
+## 환경 프로필
+
+Harbor 는 벤치마크가 요구하는 버전이 갈린다(LHTB 는 자체 포크 0.7 + 패치, SWE-Marathon·FrontierSWE v2 는 에이전트 egress
+allowlist·`gpu_types`·restore path 를 쓰는 stock ≥ 0.20). 그래서 Harbor 기준마다 venv 를 둔다(`setup.sh --profile`).
+축 사이의 계약은 그대로다: 벤치마크 프리셋의 `harbor:` → yaml 머리의 `# harbor:` → `run_job.sh` 가 venv 선택.
+
+| 프로필 | venv | Harbor | 패치 | in-process terminus-2 | 프록시 하네스 |
+|---|---|---|---|---|---|
+| `lhtb-fork` | `.venv` | LHTB 7ca0cac(0.7) | `patches/lhtb-7ca0cac/01–05` | 가능 | claude-code, codex |
+| `0.25` | `.venv-h25` | PyPI `harbor==0.25.0` | 없음 | 불가 | terminus-2-proxy, claude-code, codex |
+
+새 Harbor 기준이 필요하면: `setup.sh` 에 프로필 하나, `configs/_common.py` 의 `HARBOR_PROFILES` 에 venv 이름, (필요할 때만)
+`patches/<기준>/`. 정책·프록시 코드는 Harbor 를 import 하지 않으므로 그대로다.
+
 ## 새로 붙일 때
 
 - **새 하네스**: `optlimit/harnesses.py` 에 프로필 하나(요약 표지 문구, 트리거, 대역, 자체 임계값 손잡이) +
   필요하면 `adapters/` 에 Harbor 서브클래스. 프록시·컨트롤러·생성기는 그대로.
-- **새 벤치마크**: `configs/benchmarks.yaml` 에 프리셋 한 개. Harbor 가 받는 데이터셋이면 코드 변경 없음.
+- **새 벤치마크**: `configs/benchmarks.yaml` 에 프리셋 한 개(`harbor:` 로 프로필, `harness_kwargs:` 로 공식 프로토콜의 에이전트 옵션). Harbor 가 받는 데이터셋이면 코드 변경 없음.
 - **새 정책**: `controller.py` 의 mode 하나. 하네스·벤치마크 코드는 그대로.
