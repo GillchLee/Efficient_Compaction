@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+pytest.importorskip("harbor")
 from optlimit.adapters.harbor_installed import OptlimitClaudeCode, claude_code_compaction_env
 
 ROOT = Path(__file__).resolve().parent.parent
