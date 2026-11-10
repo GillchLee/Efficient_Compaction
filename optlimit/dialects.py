@@ -56,6 +56,12 @@ def _text(content) -> str:
     return ""
 
 
+# Characters of the first user message hashed into a "root:" session key. Large enough to reach
+# past any harness prompt template (terminus-2: task text starts at ~2.9-3.4 KB) and cover the
+# task description, small enough that a long initial terminal screen does not matter.
+ROOT_HASH_CHARS = 32000
+
+
 def _h(s: str) -> str:
     return hashlib.sha1(s.encode("utf-8", "replace")).hexdigest()[:16]
 
@@ -72,7 +78,7 @@ def _head(msgs: list) -> str:
             head += role + ":" + _text(m.get("content"))[:4000] + "\n"
             seen_sys = True
         elif role == "user" and not seen_user:
-            head += "user:" + _text(m.get("content"))[:4000] + "\n"
+            head += "user:" + _text(m.get("content"))[:ROOT_HASH_CHARS] + "\n"
             seen_user = True
         if seen_user:
             break
@@ -96,11 +102,14 @@ class Dialect:
         msgs = self.messages(body)
         return bool(msgs) and isinstance(msgs[-1], dict) and msgs[-1].get("role") == "user"
 
-    def root_preview(self, body: dict) -> str:
+    def first_user_text(self, body: dict) -> str:
         for m in self.messages(body):
             if isinstance(m, dict) and m.get("role") == "user":
-                return _text(m.get("content"))[:300]
+                return _text(m.get("content"))
         return ""
+
+    def root_preview(self, body: dict) -> str:
+        return self.first_user_text(body)[:300]
 
     def last_user_text(self, body: dict) -> str:
         for m in reversed(self.messages(body)):
@@ -180,7 +189,12 @@ class Anthropic(Dialect):
                     pass
         sys_ = body.get("system")
         sys_t = sys_ if isinstance(sys_, str) else _text(sys_)
-        return "root:" + _h(sys_t[:4000] + "\n" + self.root_preview(body))
+        # Hash the WHOLE first user message, not a prefix: Harbor's terminus-2 puts the task
+        # instruction ~3 KB into a fixed prompt template, so a 300-char prefix made every
+        # concurrent terminus-2 trial share one controller session (2026-11-11 SWE-Marathon
+        # balance run). messages[0] survives terminus-2 summarization, so the key is stable
+        # across compactions within a trial.
+        return "root:" + _h(sys_t[:4000] + "\n" + self.first_user_text(body)[:ROOT_HASH_CHARS])
 
     def usage_from_json(self, obj: dict) -> dict | None:
         u = obj.get("usage")
