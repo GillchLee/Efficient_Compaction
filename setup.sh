@@ -32,6 +32,12 @@ if [[ "$PROFILE" == harbor25 ]]; then
   cd "$HERE"
   [[ -d .venv-h25 ]] || uv venv -p "${PY:-3.12}" .venv-h25
   uv pip install --python .venv-h25/bin/python "harbor==${HARBOR_VERSION:-0.25.0}" -e ".[proxy]" pytest pytest-asyncio
+  # Stock terminus-2 apt-installs tmux at trial start with a 120 s per-command ceiling; with 4 trials
+  # starting at once on a slow apt mirror that failed 2-3 trials per job (SWE-Marathon 2026-11-11,
+  # "Failed to start tmux session"). Raise it to 300 s / 330 s total, still under Harbor's 360 s
+  # agent-setup timeout.
+  TS=$(.venv-h25/bin/python -c "import harbor.agents.terminus_2.tmux_session as m; print(m.__file__)")
+  sed -i 's/^    _TOOL_INSTALL_TIMEOUT_SEC = 120$/    _TOOL_INSTALL_TIMEOUT_SEC = 300  # optlimit setup.sh: slow apt mirrors (was 120)/; s/^    _TOOL_INSTALL_BUDGET_SEC = 240$/    _TOOL_INSTALL_BUDGET_SEC = 330  # optlimit setup.sh: under the 360 s agent-setup timeout (was 240)/' "$TS"
   if [[ ! -f .env ]]; then cp .env.example .env; chmod 600 .env; echo "created .env: fill in the keys"; fi
   mkdir -p jobs/logs data
   echo "done (profile harbor25, $(.venv-h25/bin/harbor --version 2>/dev/null | tail -1)). next e.g."
