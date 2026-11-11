@@ -103,9 +103,25 @@ class Dialect:
         return bool(msgs) and isinstance(msgs[-1], dict) and msgs[-1].get("role") == "user"
 
     def first_user_text(self, body: dict) -> str:
+        """Text of the FIRST content block of the first user message.
+
+        Only the first block: litellm merges consecutive user messages into one message with
+        several text blocks, and terminus-2 rebuilds its chat after summarization as
+        [original prompt, question prompt, questions, hand-off], so the first user message
+        then carries [original, question] blocks. Hashing the whole message gave every
+        window a new session; the first block alone is the original prompt in every window.
+        """
         for m in self.messages(body):
             if isinstance(m, dict) and m.get("role") == "user":
-                return _text(m.get("content"))
+                c = m.get("content")
+                if isinstance(c, list):
+                    for b in c:
+                        if isinstance(b, dict) and b.get("type") == "text":
+                            return str(b.get("text") or "")
+                        if isinstance(b, str):
+                            return b
+                    return ""
+                return _text(c)
         return ""
 
     def root_preview(self, body: dict) -> str:
@@ -189,11 +205,11 @@ class Anthropic(Dialect):
                     pass
         sys_ = body.get("system")
         sys_t = sys_ if isinstance(sys_, str) else _text(sys_)
-        # Hash the WHOLE first user message, not a prefix: Harbor's terminus-2 puts the task
-        # instruction ~3 KB into a fixed prompt template, so a 300-char prefix made every
-        # concurrent terminus-2 trial share one controller session (2026-11-11 SWE-Marathon
-        # balance run). messages[0] survives terminus-2 summarization, so the key is stable
-        # across compactions within a trial.
+        # Hash the whole FIRST TEXT BLOCK of the first user message, not a 300-char prefix:
+        # Harbor's terminus-2 puts the task instruction ~3 KB into a fixed prompt template, so
+        # the prefix made every concurrent terminus-2 trial share one controller session
+        # (2026-11-11 SWE-Marathon balance run). The first block is the original prompt in
+        # every window (see first_user_text), so the key is stable across compactions.
         return "root:" + _h(sys_t[:4000] + "\n" + self.first_user_text(body)[:ROOT_HASH_CHARS])
 
     def usage_from_json(self, obj: dict) -> dict | None:

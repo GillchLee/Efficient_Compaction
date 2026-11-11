@@ -44,3 +44,20 @@ def test_openai_chat_root_key_separates_tasks_sharing_a_template():
     a = _t2_body("task A")
     b = _t2_body("task B")
     assert d.session_key(a) != d.session_key(b)
+
+
+def test_anthropic_root_key_ignores_merged_question_block():
+    """litellm merges consecutive user messages into one message with several text blocks."""
+    d = Anthropic()
+    a = _t2_body("rewrite the zstd decoder in Rust")
+    first = a["messages"][0]["content"]
+    merged = {"model": "claude-haiku-5-5", "messages": [
+        {"role": "user", "content": [{"type": "text", "text": first},
+                                     {"type": "text", "text": "Original Task: ... Summary: ... questions?"}]},
+        {"role": "assistant", "content": "1. Which files did you change?"},
+        {"role": "user", "content": "Answers: ... continue."},
+    ]}
+    assert d.session_key(merged) == d.session_key(a)
+    # a different task with the same merged shape still differs
+    b = _t2_body("implement a VLIW kernel scheduler")
+    assert d.session_key(merged) != d.session_key(b)
