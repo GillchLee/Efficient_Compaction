@@ -71,6 +71,11 @@ class ProxyConfig:
     model_rewrite: dict = field(default_factory=dict)  # body.model SRC -> DST (harbor's codex strips 'vendor/' prefixes)
     controller: ControllerConfig = field(default_factory=ControllerConfig)
     transport: object | None = None      # httpx transport override (tests)
+    # Harness compaction calls whose message root differs from the main loop (terminus-2's
+    # "questions" subagent starts a fresh chat) would otherwise open a new session and their
+    # usage would be missing from the learned O_s / gamma of the trial. When on, such an
+    # orphan summary call is attributed to the session most recently told to compact.
+    attach_orphan_summaries: bool = False
 
 
 class Recorder:
@@ -123,6 +128,18 @@ def create_app(cfg: ProxyConfig) -> Starlette:
 
     window_ids: dict[str, str] = {}
     rejects: dict[str, int] = {}
+    reject_ts: dict[str, float] = {}
+
+    def attach_orphan(key: str, kind: str) -> str | None:
+        """Session to charge an orphan summary call to (a session mid-compaction), or None."""
+        if not cfg.attach_orphan_summaries or kind != "summary":
+            return None
+        s0 = ctl.sessions.get(key)
+        if s0 is not None and s0.first_prompt is not None:
+            return None
+        cands = [(reject_ts.get(k, s.created), k) for k, s in ctl.sessions.items()
+                 if s.first_prompt is not None and (s.pending_compact or s.expect_boundary)]
+        return max(cands)[1] if cands else None
 
     def should_reject(key: str, kind: str) -> bool:
         """Error trigger: refuse the next main-loop request after a compact_now decision."""
@@ -194,6 +211,10 @@ def create_app(cfg: ProxyConfig) -> Starlette:
             hdrs = {k.lower(): v for k, v in request.headers.items()}
             key = dialect.session_key(body, hdrs)
             kind, ws_hint = dialect.classify(body)
+            owner = attach_orphan(key, kind)
+            if owner is not None:
+                meta["orphan_session"] = key
+                key = owner
             # Codex numbers its compaction windows: x-codex-window-id = "<thread>:<n>"; a change
             # of n inside a thread is an explicit new-window signal.
             wid = hdrs.get("x-codex-window-id")
@@ -223,6 +244,7 @@ def create_app(cfg: ProxyConfig) -> Starlette:
                              "decision": ctl.session(key).last_decision.as_dict() if ctl.session(key).last_decision else None,
                              "latency_ms": round((time.monotonic() - t0) * 1000)})
                 rec.write(meta)
+                reject_ts[key] = time.monotonic()
                 logger.info("reject %s session=%s turn=%d est=%d", req_id, key[:12], ctl.session(key).turn_idx, est)
                 return JSONResponse(err, status_code=status)
             changed = dialect.prepare_request(body)

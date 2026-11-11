@@ -36,6 +36,7 @@ def build_config(a):
         inject_openai_key=os.environ.get("OPENAI_API_KEY") if a.inject_keys else None,
         model_rewrite=dict(kv.split("=", 1) for kv in a.model_rewrite),
         min_window_turns=a.min_window_turns,
+        attach_orphan_summaries=a.attach_orphan_summaries,
         controller=config_from_spec(spec),
     )
 
@@ -57,6 +58,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="prompt size reported at most otherwise (below the harness threshold)")
     ap.add_argument("--min-window-turns", type=int, default=0,
                     help="hold a decided compaction until the window has this many main turns (harness guard)")
+    ap.add_argument("--attach-orphan-summaries", action="store_true",
+                    help="charge harness compaction calls that open a new message root (terminus-2 "
+                         "questions subagent) to the session mid-compaction, so learned O_s/gamma see them")
     ap.add_argument("--anthropic-upstream", default="https://api.anthropic.com")
     ap.add_argument("--openai-upstream", default="https://api.openai.com")
     ap.add_argument("--model-rewrite", action="append", default=[], metavar="SRC=DST",

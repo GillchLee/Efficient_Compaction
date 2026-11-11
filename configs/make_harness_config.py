@@ -50,6 +50,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--learn", action="store_true",
                     help="learn Lp, summary output and gamma from this run's own compactions")
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="extra controller field")
+    ap.add_argument("--attach-orphan-summaries", action="store_true",
+                    help="proxy: charge compaction calls with a new message root (terminus-2 questions "
+                         "subagent) to the compacting session (learned O_s/gamma)")
     ap.add_argument("--trigger", choices=["usage", "error"], help="proxy trigger (default: the harness profile's)")
     ap.add_argument("--observe", action="store_true",
                     help="static modes: still run the proxy with trigger=off to log every call's usage")
@@ -77,8 +80,11 @@ def main(argv: list[str] | None = None) -> int:
     def proxy_block(spec: dict) -> dict:
         spec = {**spec, **parse_sets(a.set)}
         spec.setdefault("min_window_turns", prof.min_window_turns)
-        return {"trigger": trigger, "spec": spec, "low_cap": band["low_cap"], "high": band["high"],
-                "min_window_turns": spec["min_window_turns"]}
+        blk = {"trigger": trigger, "spec": spec, "low_cap": band["low_cap"], "high": band["high"],
+               "min_window_turns": spec["min_window_turns"]}
+        if a.attach_orphan_summaries:
+            blk["attach_orphan_summaries"] = True
+        return blk
 
     proxy: dict | None = None
     if a.limit is not None:

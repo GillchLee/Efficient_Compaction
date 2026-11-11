@@ -260,3 +260,42 @@ async def test_stream_reaches_client_uncompressed(tmp_path):
     assert "message_start" in r.text and "content-encoding" not in r.headers
     rec = [json.loads(l) for l in open(cfg.log_path)][-1]
     assert rec["prompt"] == 1000 and rec["cached"] == 995
+
+
+async def test_orphan_summary_call_is_charged_to_the_compacting_session(tmp_path):
+    """terminus-2's questions subagent starts a fresh chat: with attach_orphan_summaries its
+    usage joins the trial's session instead of opening a new one."""
+    cfg = ProxyConfig(anthropic_upstream="http://up", openai_upstream="http://up", trigger="error",
+                      log_path=str(tmp_path / "log.jsonl"), signal_high=900_000, signal_low_cap=50_000,
+                      attach_orphan_summaries=True,
+                      controller=ControllerConfig(mode="fixed", fixed_limit=2500, g_prior=100, Lp=300,
+                                                  min_window_turns=1, learn_summary_out=True, learn_weight=1.0),
+                      transport=httpx.ASGITransport(app=upstream))
+    app = create_app(cfg)
+    ctl = app.state.controller
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://p") as c:
+        msgs = [{"role": "user", "content": "task " * 50}]
+        for t in range(40):
+            r = await c.post("/v1/messages", json={"model": "m", "messages": msgs})
+            if r.status_code == 400:
+                break
+            msgs = grow(msgs, 2)
+        assert r.status_code == 400
+        main_key = next(iter(ctl.sessions))
+        # summary call on the same root, then the questions subagent with a new root
+        r = await c.post("/v1/messages", json={"model": "m", "messages": msgs + [
+            {"role": "user", "content": "You are about to hand off your work to another AI agent. Summarise."}]})
+        assert r.status_code == 200
+        r = await c.post("/v1/messages", json={"model": "m", "messages": [
+            {"role": "user", "content": "You are picking up work from a previous AI agent on this task: ..."}]})
+        assert r.status_code == 200
+        # new window of the main loop
+        r = await c.post("/v1/messages", json={"model": "m", "messages": msgs[:1] + [
+            {"role": "user", "content": "Here are the answers the other agent provided.\n\nContinue."}]})
+        assert r.status_code == 200
+    assert list(ctl.sessions) == [main_key]            # no orphan session was created
+    s = ctl.sessions[main_key]
+    assert s.so_obs == [14.0]                            # both compaction calls' completion tokens (7 + 7)
+    recs = [json.loads(l) for l in open(cfg.log_path)]
+    orphan = [r for r in recs if r.get("orphan_session")]
+    assert len(orphan) == 1 and orphan[0]["session"] == main_key and orphan[0]["kind"] == "summary"

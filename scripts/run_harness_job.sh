@@ -62,15 +62,17 @@ python - "$PROXY_JSON" "$SPEC_FILE" <<'PY'
 import json, sys
 json.dump(json.loads(sys.argv[1])["spec"], open(sys.argv[2], "w"))
 PY
-read -r TRIGGER LOW HIGH MINWIN < <(python - "$PROXY_JSON" <<'PY'
+read -r TRIGGER LOW HIGH MINWIN ORPHAN < <(python - "$PROXY_JSON" <<'PY'
 import json, sys
 p = json.loads(sys.argv[1])
-print(p["trigger"], p.get("low_cap", 50000), p.get("high", 950000), p.get("min_window_turns", 0))
+print(p["trigger"], p.get("low_cap", 50000), p.get("high", 950000), p.get("min_window_turns", 0),
+      int(bool(p.get("attach_orphan_summaries"))))
 PY
 )
 ARGS=(--host 0.0.0.0 --port "$PORT" --trigger "$TRIGGER" --spec-file "$SPEC_FILE"
       --log "jobs/logs/$JOB_NAME.proxy.jsonl" --signal-low-cap "$LOW" --signal-high "$HIGH"
       --min-window-turns "$MINWIN")
+[[ "$ORPHAN" == 1 ]] && ARGS+=(--attach-orphan-summaries)
 # upstream overrides (e.g. scripts/fake_llm_upstream.py for a keyless check of the trigger path)
 [[ -n "${OPTLIMIT_ANTHROPIC_UPSTREAM:-}" ]] && ARGS+=(--anthropic-upstream "$OPTLIMIT_ANTHROPIC_UPSTREAM")
 [[ -n "${OPTLIMIT_OPENAI_UPSTREAM:-}" ]] && ARGS+=(--openai-upstream "$OPTLIMIT_OPENAI_UPSTREAM")
