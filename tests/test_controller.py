@@ -178,3 +178,51 @@ def test_balance_rule_matches_formula_for_constant_growth_and_reacts_to_bursts()
     ctl.on_prompt("s", "main", 2000.0)
     d = ctl.on_prompt("s", "main", 3000.0)
     assert d.rent == 1000.0 and d.C is not None and d.C > 200000 and d.reason == "balance_ref"
+
+
+def test_formula_base_window_start_shifts_limit_to_realized_start():
+    base = dict(Lp=3203, L0_mode="fixed", L0_fixed=1258, alpha=10, beta=50, m=2.178, gamma=1.508,
+                summary_out=4242, g_prior=1000, g_prior_weight=1000, lookahead=0)
+    model = LimitController(ControllerConfig(mode="formula", **base))
+    real = LimitController(ControllerConfig(mode="formula", formula_base="window_start", **base))
+    # first window starts at 2K (no hand-off): same K*, limit lower by (L0 + Lp) - 2K
+    dm = model.on_prompt("s", "main", 2000.0)
+    dr = real.on_prompt("s", "main", 2000.0)
+    assert abs((dm.limit - dr.limit) - (1258 + 3203 - 2000)) < 1e-6 and dr.reason.endswith("_ws")
+    # a window that restarts at a 37K prompt (huge hand-off): the realized base raises L* by
+    # 37K - (L0 + Lp) instead of firing after a couple of turns
+    for ctl in (model, real):
+        ctl.note_kind("s", "summary")
+        ctl.on_prompt("s", "main", 37000.0, cached=1258.0)
+    dm = model.on_prompt("s", "main", 38000.0)
+    dr = real.on_prompt("s", "main", 38000.0)
+    assert abs((dr.limit - dm.limit) - (37000 - (1258 + 3203))) < 1e-6
+    assert dr.limit > 55000 and not dr.compact_now
+
+
+def test_balance_hard_cap_fires_before_rent_reaches_C():
+    base = dict(Lp=3203, L0_mode="fixed", L0_fixed=1258, alpha=10, beta=50, m=2.178, gamma=1.508,
+                summary_out=4242, g_prior=1000, g_prior_weight=1000, lookahead=0)
+    ctl = LimitController(ControllerConfig(mode="balance", hard_cap=20000, **base))
+    fired = None
+    p = 4461.0
+    for t in range(60):
+        d = ctl.on_prompt("s", "main", p)
+        if d.compact_now:
+            fired = (t, p, d.reason, d.rent, d.C)
+            break
+        p += 1000.0
+    assert fired is not None and fired[2] == "hard_cap" and fired[1] >= 20000 and fired[3] < fired[4]
+
+
+def test_rent_base_handoff_ignores_growth_below_L0_plus_Lp_in_first_window():
+    base = dict(Lp=3203, L0_mode="fixed", L0_fixed=1258, alpha=10, beta=50, m=2.178, gamma=1.508,
+                summary_out=4242, g_prior=1000, g_prior_weight=1000, lookahead=0)
+    ws = LimitController(ControllerConfig(mode="balance", **base))
+    ho = LimitController(ControllerConfig(mode="balance", rent_base="handoff", **base))
+    for ctl in (ws, ho):
+        ctl.on_prompt("s", "main", 2000.0)
+    d_ws = ws.on_prompt("s", "main", 5000.0)
+    d_ho = ho.on_prompt("s", "main", 5000.0)
+    assert d_ws.rent == 3000.0
+    assert d_ho.rent == 5000.0 - (1258 + 3203)

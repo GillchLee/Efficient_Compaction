@@ -86,6 +86,18 @@ class ControllerConfig:
     # i.e. K >= reacq_turns / reacq_eps, and charge those turns in the per-turn cost
     reacq_turns: float = 0.0
     reacq_eps: float = 0.1
+    # formula mode: where the window starts in L* = P_s + g (K* - 1).  "model" = L0 + Lp (prior /
+    # learned); "window_start" = the realized first prompt of the current window (same K*, no
+    # estimate of P_s).  SWE-Marathon 2026-11-11: a 37K hand-off made the modeled L* fire after
+    # 2K of growth (112% over that window's optimum); the realized base removes that case.
+    formula_base: str = "model"
+    # balance mode: compact when P_t + lookahead * g_hat >= hard_cap even if the rent has not
+    # reached C (price tiers, context limits).  limit_max only caps the reference L*.
+    hard_cap: float | None = None
+    # balance mode: baseline the rent is measured from.  "window_start" = the window's first
+    # prompt; "handoff" = max(first prompt, L0 + Lp), i.e. what a compaction would restart from
+    # (differs only in the very first window, which starts near L0 without a hand-off).
+    rent_base: str = "window_start"
 
 
 @dataclass
@@ -224,6 +236,14 @@ class LimitController:
         return Params(L0=L0, Lp=self.Lp(s), g=s.g.value, alpha=c.alpha, beta=c.beta, phi=c.phi,
                       m=c.m, gamma=self.gamma(s), summary_out=self.summary_out(s), summary_fixed=c.summary_fixed)
 
+    def rent_base(self, s: SessionState, prompt: float) -> float:
+        base = s.window_start_prompt if s.window_start_prompt is not None else prompt
+        if self.cfg.rent_base == "handoff":
+            L0 = self.L0(s)
+            if L0 is not None:
+                base = max(base, L0 + self.Lp(s))
+        return base
+
     def k_min(self) -> int:
         c = self.cfg
         return max(c.min_window_turns, math.ceil(c.reacq_turns / c.reacq_eps) if c.reacq_turns > 0 else 0)
@@ -257,6 +277,13 @@ class LimitController:
         k_min = self.k_min()
         floor = p.L0 + self.Lp(s) + p.g * (k_min - 1)
         reason = "formula" if c.mode != "balance" else "balance_ref"
+        if c.formula_base == "window_start" and s.window_start_prompt is not None:
+            # K* does not depend on P_s, so shift L* and the floor from the modeled start to the
+            # realized one (L* = P_s + g (K* - 1)).
+            shift = s.window_start_prompt - (p.L0 + self.Lp(s))
+            L += shift
+            floor += shift
+            reason += "_ws"
         if L < floor:
             L, reason = floor, "floor_min_window"
         if c.limit_min is not None and L < c.limit_min:
@@ -305,7 +332,7 @@ class LimitController:
         elif s.last_main_prompt is not None:
             s.g.add(prompt - s.last_main_prompt)
             s.window_turns += 1
-            s.rent += max(prompt - (s.window_start_prompt or prompt), 0.0)
+            s.rent += max(prompt - self.rent_base(s, prompt), 0.0)
         s.expect_boundary = False
         s.last_main_prompt = prompt
 
@@ -318,11 +345,14 @@ class LimitController:
             rent = s.rent
             if C is not None:
                 # next turn would add (P_t + g_hat - P_start) of rent: compact before paying it
-                excess_next = max(prompt + c.lookahead * g_hat - (s.window_start_prompt or prompt), 0.0)
+                excess_next = max(prompt + c.lookahead * g_hat - self.rent_base(s, prompt), 0.0)
                 L0 = self.L0(s) or 0.0
                 if (rent + excess_next >= C and s.window_turns >= self.k_min()
                         and prompt > L0 + self.Lp(s)):
                     compact, reason = True, "balance"
+                elif (c.hard_cap is not None and prompt + c.lookahead * g_hat >= c.hard_cap
+                        and prompt > L0 + self.Lp(s)):
+                    compact, reason = True, "hard_cap"
         elif limit is not None and not s.pending_compact:
             predicted = prompt + c.lookahead * g_hat
             L0 = self.L0(s) or 0.0
