@@ -157,7 +157,13 @@ TRIM_PID=$!
 trap 'kill $TRIM_PID 2>/dev/null' EXIT
 status=0
 if [[ -f "$JOB_DIR/config.json" ]]; then
-  harbor jobs resume -p "$JOB_DIR" >>"$LOG" 2>&1 || status=$?
+  # HARBOR_RESUME_FILTER=RuntimeError (comma-separated) re-runs trials that died with those
+  # exception types (e.g. tmux install timeouts, compose/pull failures) instead of skipping them.
+  RESUME_ARGS=()
+  if [[ -n "${HARBOR_RESUME_FILTER:-}" ]]; then
+    IFS=, read -ra _types <<<"$HARBOR_RESUME_FILTER"; for t in "${_types[@]}"; do RESUME_ARGS+=(-f "$t"); done
+  fi
+  harbor jobs resume -p "$JOB_DIR" "${RESUME_ARGS[@]}" >>"$LOG" 2>&1 || status=$?
 else
   # HARBOR_EXTRA_ARGS: run_harness_job.sh allowlists the proxy host for the agent (Harbor >= 0.20)
   # shellcheck disable=SC2086
