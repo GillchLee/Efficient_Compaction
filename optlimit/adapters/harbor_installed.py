@@ -28,8 +28,15 @@ Both classes below add only what the stock Harbor agents lack:
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
+import logging
 import math
+import os
+import re
 import shlex
+import subprocess
 from pathlib import Path
 
 from harbor.agents.installed.claude_code import ClaudeCode
@@ -81,7 +88,129 @@ def _mark_completed(context) -> None:
     context.metadata.setdefault("termination_reason", "confirmed_task_complete")
 
 
-class OptlimitClaudeCode(ClaudeCode):
+
+# ---------------------------------------------------------------------------------------------
+# Robust in-container install (SWE-Marathon chain 2026-11-12: 13 of 18 Claude Code trials died
+# at setup). Two independent infra failures, both outside the model/policy under test:
+#   * the task container shares the egress sidecar's network namespace and apt ran before the
+#     sidecar's DNS was up ("Could not resolve archive.ubuntu.com" within 2 min of trial start);
+#   * every trial re-downloads the 342 MB Claude Code binary from downloads.claude.ai, which at
+#     130-700 KB/s per container exceeds the 1200 s setup timeout.
+# Fix: wait for DNS (bounded) + retry the package step, and download the binary ONCE into a host
+# cache (sha256-checked against the release manifest), then `docker compose cp` it into the
+# container and run its own `claude install`. OPTLIMIT_CLAUDE_CACHE=0 restores the stock
+# bootstrap path; OPTLIMIT_CLAUDE_CACHE=<dir> moves the cache (default ~/.cache/optlimit/claude-code).
+# ---------------------------------------------------------------------------------------------
+CLAUDE_RELEASES = "https://downloads.claude.ai/claude-code-releases"
+CLAUDE_PLATFORM = "linux-x64"
+_DNS_WAIT_CMD = (
+    "command -v getent >/dev/null 2>&1 || exit 0; "
+    "for i in $(seq 1 45); do getent hosts archive.ubuntu.com >/dev/null 2>&1 || "
+    "getent hosts deb.debian.org >/dev/null 2>&1 || getent hosts downloads.claude.ai >/dev/null 2>&1 && exit 0; "
+    "sleep 2; done; echo 'optlimit: container DNS still failing after 90 s' >&2; exit 0"
+)
+_log = logging.getLogger(__name__)
+
+
+def claude_cache_dir() -> Path | None:
+    v = os.environ.get("OPTLIMIT_CLAUDE_CACHE", "")
+    if v.lower() in ("0", "off", "no", "false"):
+        return None
+    return Path(v) if v else Path.home() / ".cache" / "optlimit" / "claude-code"
+
+
+def _curl(url: str, out: Path | None = None, timeout: int = 20) -> str:
+    args = ["curl", "-4", "-fsSL", "-m", str(timeout), url] + (["-C", "-", "-o", str(out)] if out else [])
+    r = subprocess.run(args, capture_output=True, text=True, timeout=timeout + 30)
+    if r.returncode != 0:
+        raise RuntimeError(f"curl {url}: rc={r.returncode} {r.stderr.strip()[:200]}")
+    return r.stdout
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def cached_claude_binary(version: str | None = None, cache: Path | None = None,
+                         download_timeout: int = 900) -> Path | None:
+    """Path of the sha256-verified Claude Code binary in the host cache, downloading it once.
+
+    version: an explicit release (``2.1.322``); None/stable/latest resolve the release's ``latest``
+    pointer, falling back to the newest cached release when the pointer cannot be fetched.
+    Returns None when the cache is disabled or nothing could be obtained (caller falls back to
+    the stock in-container bootstrap).
+    """
+    cache = cache or claude_cache_dir()
+    if cache is None:
+        return None
+    cache.mkdir(parents=True, exist_ok=True)
+    ver = version if version and re.match(r"^\d+\.\d+\.\d+", version) else None
+    if ver is None:
+        # No pin: the newest cached release, so every trial of a sweep runs the same binary and
+        # nothing touches the network (refresh = delete the cache dir or pin a version).
+        have = sorted((d for d in cache.iterdir() if (d / "claude").is_file()),
+                      key=lambda d: [int(x) for x in re.findall(r"\d+", d.name)[:3]])
+        if have:
+            return have[-1] / "claude"
+        try:
+            ver = _curl(f"{CLAUDE_RELEASES}/latest").strip()
+        except Exception as e:  # noqa: BLE001
+            _log.warning("claude cache: cannot resolve latest (%s) and nothing cached", e)
+            return None
+    d = cache / ver
+    final = d / "claude"
+    if final.is_file():
+        return final
+    d.mkdir(parents=True, exist_ok=True)
+    try:
+        manifest = d / "manifest.json"
+        if not manifest.is_file():
+            manifest.write_text(_curl(f"{CLAUDE_RELEASES}/{ver}/manifest.json"))
+        plat = json.loads(manifest.read_text())["platforms"][CLAUDE_PLATFORM]
+        part = d / "claude.part"
+        _curl(f"{CLAUDE_RELEASES}/{ver}/{CLAUDE_PLATFORM}/claude", part, timeout=download_timeout)
+        if _sha256(part) != plat["checksum"]:
+            part.unlink(missing_ok=True)
+            raise RuntimeError("checksum mismatch")
+        part.chmod(0o755)
+        part.rename(final)
+        return final
+    except Exception as e:  # noqa: BLE001
+        _log.warning("claude cache: download of %s failed (%s)", ver, e)
+        return None
+
+
+class _RobustInstall:
+    """Mixin: wait for the sidecar DNS and retry the system-package step (see module comment)."""
+
+    _INSTALL_RETRIES = 3
+
+    async def _wait_for_dns(self, environment) -> None:
+        try:
+            await self.exec_as_root(environment, command=_DNS_WAIT_CMD, timeout_sec=120)
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("DNS wait failed (%s); continuing", e)
+
+    async def ensure_system_dependencies(self, environment, dependencies) -> None:
+        last: Exception | None = None
+        for attempt in range(1, self._INSTALL_RETRIES + 1):
+            await self._wait_for_dns(environment)
+            try:
+                await super().ensure_system_dependencies(environment, dependencies)
+                return
+            except Exception as e:  # noqa: BLE001
+                last = e
+                self.logger.warning("system package install attempt %d/%d failed: %s",
+                                    attempt, self._INSTALL_RETRIES, str(e)[:300])
+                await asyncio.sleep(15 * attempt)
+        assert last is not None
+        raise last
+
+class OptlimitClaudeCode(_RobustInstall, ClaudeCode):
     """claude-code with a settable compaction threshold and same-conversation resume.
 
     kwargs:
@@ -104,6 +233,35 @@ class OptlimitClaudeCode(ClaudeCode):
         self._compaction_env = env
         self._environment = None
         self._resume = False
+
+    async def install(self, environment) -> None:
+        """Stock install, but with the binary from the host cache when available (module comment)."""
+        if await self._installed_claude_satisfies_version(environment):
+            return
+        await self.ensure_system_dependencies(environment, ("curl", "bash", "nodejs", "npm", "procps"))
+        binary = await asyncio.to_thread(cached_claude_binary, self._version)
+        if binary is None:
+            self.logger.warning("claude cache unavailable; falling back to the in-container bootstrap")
+            await super().install(environment)
+            return
+        ver = binary.parent.name
+        self.logger.info("installing Claude Code %s from host cache %s", ver, binary)
+        await environment.upload_file(binary, "/tmp/optlimit-claude")
+        # Same layout as the official installer (~/.local/share/claude/versions/<ver> + symlink
+        # ~/.local/bin/claude), written by hand: the binary's own `install` re-downloads `latest`.
+        await self.exec_as_agent(
+            environment,
+            command=(
+                "set -euo pipefail; V=" + shlex.quote(ver) + "; "
+                'mkdir -p "$HOME/.local/bin" "$HOME/.local/share/claude/versions" && '
+                'cp /tmp/optlimit-claude "$HOME/.local/share/claude/versions/$V" && '
+                'chmod 755 "$HOME/.local/share/claude/versions/$V" && '
+                'ln -sfn "$HOME/.local/share/claude/versions/$V" "$HOME/.local/bin/claude" && '
+                "echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.bashrc && "
+                'export PATH="$HOME/.local/bin:$PATH" && claude --version'
+            ),
+        )
+        await self.exec_as_root(environment, command="rm -f /tmp/optlimit-claude")
 
     def build_cli_flags(self) -> str:
         flags = super().build_cli_flags()
@@ -148,7 +306,7 @@ def codex_compaction_flags(limit: int | None = None, scope: str | None = None,
     return flags
 
 
-class OptlimitCodex(Codex):
+class OptlimitCodex(_RobustInstall, Codex):
     """codex with a settable compaction trigger and same-conversation resume.
 
     kwargs:

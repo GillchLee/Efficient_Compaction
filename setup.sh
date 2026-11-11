@@ -38,6 +38,9 @@ if [[ "$PROFILE" == harbor25 ]]; then
   # agent-setup timeout.
   TS=$(.venv-h25/bin/python -c "import harbor.agents.terminus_2.tmux_session as m; print(m.__file__)")
   sed -i 's/^    _TOOL_INSTALL_TIMEOUT_SEC = 120$/    _TOOL_INSTALL_TIMEOUT_SEC = 300  # optlimit setup.sh: slow apt mirrors (was 120)/; s/^    _TOOL_INSTALL_BUDGET_SEC = 240$/    _TOOL_INSTALL_BUDGET_SEC = 330  # optlimit setup.sh: under the 360 s agent-setup timeout (was 240)/' "$TS"
+  # Wait (<= 60 s) for the egress sidecar's DNS before apt: the task container shares the sidecar's
+  # network namespace and trials starting together lost apt to "Could not resolve" (2026-11-12).
+  sed -i 's|"apt-get": f"DEBIAN_FRONTEND=noninteractive apt-get update \&\& |"apt-get": f"for i in $(seq 1 30); do getent hosts archive.ubuntu.com >/dev/null 2>\&1 \|\| getent hosts deb.debian.org >/dev/null 2>\&1 \&\& break; sleep 2; done; DEBIAN_FRONTEND=noninteractive apt-get update \&\& |' "$TS"
   if [[ ! -f .env ]]; then cp .env.example .env; chmod 600 .env; echo "created .env: fill in the keys"; fi
   mkdir -p jobs/logs data
   echo "done (profile harbor25, $(.venv-h25/bin/harbor --version 2>/dev/null | tail -1)). next e.g."
