@@ -34,6 +34,7 @@ from starlette.routing import Route
 
 from . import dialects as D
 from .controller import ControllerConfig, LimitController
+from .reread import RereadTracker
 
 logger = logging.getLogger("optlimit")
 
@@ -127,6 +128,10 @@ def create_app(cfg: ProxyConfig) -> Starlette:
         return base.rstrip("/") + path
 
     window_ids: dict[str, str] = {}
+    trackers: dict[str, RereadTracker] = {}   # per session: re-reads after compaction (cost term, carry-over)
+    last_cost: dict[str, float] = {}          # cost of the session's last main call (read units)
+    pre_started: dict[str, bool] = {}         # tracker window already advanced for the window that is starting
+    carry: dict[str, str] = {}                # carry-over block of the session's current window
     rejects: dict[str, int] = {}
     reject_ts: dict[str, float] = {}
 
@@ -230,6 +235,36 @@ def create_app(cfg: ProxyConfig) -> Starlette:
                          "n_assistant": dialect.n_assistant(body), "model": body.get("model"),
                          "stream": dialect.is_stream(body), "root_preview": dialect.root_preview(body)[:160]})
             ctl.note_kind(key, kind)
+            changed = False
+            if kind in ("main", "summary"):
+                # tool calls new in this request were issued by the previous main response
+                tr = trackers.get(key)
+                if tr is None:
+                    tr = trackers[key] = RereadTracker()
+                try:
+                    for ev in dialect.tool_events(body):
+                        if ev.get("id"):
+                            tr.observe(ev["id"], ev.get("name") or "", ev.get("text") or "", ev.get("output"))
+                    if tr.close_turn(last_cost.get(key, 0.0)):
+                        meta["reread_turn"] = True
+                        if kind == "main":
+                            # this prompt carries the re-read output: Net rent leaves that growth out
+                            ctl.note_reread_growth(key)
+                    if kind == "main" and ws_hint and not pre_started.get(key):
+                        w, turns, cost = tr.start_window()
+                        pre_started[key] = True
+                        if w >= 1:
+                            ctl.note_reread(key, turns, cost)
+                        meta["reread_window"] = {"window": w, "turns": turns, "cost": round(cost)}
+                        cc = cfg.controller
+                        carry[key] = tr.carry_block(cc.carry_files, cc.carry_item_tokens) if cc.carry_files > 0 else ""
+                        if carry[key]:
+                            meta["carry"] = {"chars": len(carry[key]), "files": sorted(tr.carried)[:40]}
+                    if carry.get(key) and dialect.inject_carry(body, carry[key]):
+                        changed = True
+                        meta["carry_injected"] = True
+                except Exception:
+                    logger.exception("re-read tracking failed; request forwarded unchanged")
             if cfg.dump_dir:
                 info = dict(meta, last_user_text=dialect.last_user_text(body)[:4000])
                 if cfg.dump_messages:
@@ -247,7 +282,7 @@ def create_app(cfg: ProxyConfig) -> Starlette:
                 reject_ts[key] = time.monotonic()
                 logger.info("reject %s session=%s turn=%d est=%d", req_id, key[:12], ctl.session(key).turn_idx, est)
                 return JSONResponse(err, status_code=status)
-            changed = dialect.prepare_request(body)
+            changed = dialect.prepare_request(body) or changed
             if cfg.rewrite_api_compaction and kind == "main":
                 L, _ = ctl.limit(ctl.session(key))
                 if L is not None and rewrite_api_threshold(body, max(int(L), cfg.api_trigger_min)):
@@ -289,6 +324,14 @@ def create_app(cfg: ProxyConfig) -> Starlette:
                 d = ctl.on_prompt(key, kind, float(u["prompt"]), float(u.get("cached") or 0),
                                   window_start_hint=ws_hint)
                 state["decision"] = d
+                if kind == "main" and d.window_start and not pre_started.pop(key, False):
+                    # window start found from the prompt drop only (no hint in the request)
+                    tr = trackers.get(key)
+                    if tr is not None:
+                        w, turns, cost = tr.start_window()
+                        if w >= 1:
+                            ctl.note_reread(key, turns, cost)
+                        carry[key] = ""
                 state["signal"] = signal_for(d, int(u["prompt"]), key if kind == "main" else None)
                 if d.compact_now:
                     logger.info("compact_now %s session=%s turn=%d P=%d L*=%.0f g=%.0f (%s)",
@@ -304,6 +347,8 @@ def create_app(cfg: ProxyConfig) -> Starlette:
                                        completion=float(u.get("api_compaction_output") or 0))
                 meta.update({"api_compaction_input": u["api_compaction_input"],
                              "api_compaction_output": u.get("api_compaction_output")})
+            if kind == "main" and u.get("prompt") is not None:
+                last_cost[key] = ctl.call_cost(float(u["prompt"]), float(u.get("cached") or 0), float(u.get("output") or 0))
             if kind == "summary" and u.get("prompt") is not None:
                 # the harness's own compaction call: feeds the learned Lp / O_s / gamma terms (C)
                 ctl.note_summary_usage(key, float(u["prompt"]), cached=float(u.get("cached") or 0),

@@ -85,6 +85,19 @@ def _head(msgs: list) -> str:
     return head
 
 
+def _keystrokes(txt: str) -> list[str]:
+    """Shell commands of a terminus-2 style JSON reply ({"commands": [{"keystrokes": "..."}]})."""
+    try:
+        i = txt.index("{")
+        obj = json.loads(txt[i:txt.rindex("}") + 1])
+        cmds = obj.get("commands") if isinstance(obj, dict) else None
+        if isinstance(cmds, list):
+            return [str(c.get("keystrokes") or "") for c in cmds if isinstance(c, dict) and c.get("keystrokes")]
+    except (ValueError, AttributeError):
+        pass
+    return [m.encode().decode("unicode_escape", "replace") for m in re.findall(r'"keystrokes"\s*:\s*"((?:[^"\\]|\\.)*)"', txt)]
+
+
 class Dialect:
     name = ""
     messages_key = "messages"
@@ -132,6 +145,48 @@ class Dialect:
             if isinstance(m, dict) and m.get("role") == "user":
                 return _text(m.get("content"))
         return ""
+
+    # ---- tool calls visible in the request (optlimit/reread.py)
+    def tool_events(self, body: dict) -> list[dict]:
+        """[{id, name, text, output}] for every tool call in the request, in order.
+
+        Chat Completions: assistant `tool_calls` + `tool` messages; terminus-2 style agents put
+        {"commands": [{"keystrokes": ...}]} in the assistant text and get the terminal screen back
+        as the next user message.
+        """
+        out: list[dict] = []
+        by_id: dict[str, dict] = {}
+        msgs = self.messages(body)
+        for i, m in enumerate(msgs):
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role")
+            if role == "assistant":
+                for tc in m.get("tool_calls") or []:
+                    if not isinstance(tc, dict):
+                        continue
+                    fn = tc.get("function") or {}
+                    ev = {"id": tc.get("id"), "name": str(fn.get("name") or ""), "text": str(fn.get("arguments") or ""),
+                          "output": None}
+                    out.append(ev)
+                    if ev["id"]:
+                        by_id[ev["id"]] = ev
+                txt = _text(m.get("content"))
+                if '"keystrokes"' in txt:
+                    nxt = msgs[i + 1] if i + 1 < len(msgs) and isinstance(msgs[i + 1], dict) else None
+                    screen = _text(nxt.get("content")) if nxt and nxt.get("role") == "user" else None
+                    for n, ks in enumerate(_keystrokes(txt)):
+                        out.append({"id": "ks:" + _h(f"{i}:{n}:{ks}"), "name": "keystrokes", "text": ks,
+                                    "output": screen})
+            elif role == "tool":
+                ev = by_id.get(m.get("tool_call_id"))
+                if ev is not None:
+                    ev["output"] = _text(m.get("content"))
+        return out
+
+    def inject_carry(self, body: dict, text: str) -> bool:
+        """Put the carry-over block behind the compaction summary; False when not supported."""
+        return False
 
     def n_assistant(self, body: dict) -> int:
         return sum(1 for m in self.messages(body) if isinstance(m, dict) and m.get("role") == "assistant")
@@ -191,6 +246,28 @@ def merge_usage(acc: dict | None, new: dict) -> dict:
 
 class Anthropic(Dialect):
     name = "anthropic"
+
+    def tool_events(self, body: dict) -> list[dict]:
+        out: list[dict] = []
+        by_id: dict[str, dict] = {}
+        for m in self.messages(body):
+            c = m.get("content") if isinstance(m, dict) else None
+            if not isinstance(c, list):
+                continue
+            for b in c:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "tool_use":
+                    ev = {"id": b.get("id"), "name": str(b.get("name") or ""),
+                          "text": json.dumps(b.get("input"), ensure_ascii=False), "output": None}
+                    out.append(ev)
+                    if ev["id"]:
+                        by_id[ev["id"]] = ev
+                elif b.get("type") == "tool_result":
+                    ev = by_id.get(b.get("tool_use_id"))
+                    if ev is not None:
+                        ev["output"] = _text(b.get("content"))
+        return out
 
     def session_key(self, body: dict, headers: dict | None = None) -> str:
         meta = body.get("metadata")
@@ -354,6 +431,62 @@ class OpenAIResponses(Dialect):
     def _is_msg(self, item) -> bool:
         return isinstance(item, dict) and (item.get("type") in (None, "message")) and "role" in item
 
+    CALL_TYPES = ("function_call", "custom_tool_call", "local_shell_call")
+    OUTPUT_TYPES = ("function_call_output", "custom_tool_call_output", "local_shell_call_output")
+    CARRY_MARK = "[Carried over from before the context compaction]"
+
+    def tool_events(self, body: dict) -> list[dict]:
+        out: list[dict] = []
+        by_id: dict[str, dict] = {}
+        for it in self.messages(body):
+            if not isinstance(it, dict):
+                continue
+            t = it.get("type")
+            if t in self.CALL_TYPES:
+                raw = it.get("input") if it.get("input") is not None else it.get("arguments")
+                if raw is None and it.get("action") is not None:
+                    raw = json.dumps(it.get("action"), ensure_ascii=False)
+                ev = {"id": it.get("call_id") or it.get("id"), "name": str(it.get("name") or t),
+                      "text": raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False), "output": None}
+                out.append(ev)
+                if ev["id"]:
+                    by_id[ev["id"]] = ev
+            elif t in self.OUTPUT_TYPES:
+                ev = by_id.get(it.get("call_id"))
+                if ev is not None:
+                    o = it.get("output")
+                    ev["output"] = o if isinstance(o, str) else _text(o)
+        return out
+
+    def inject_carry(self, body: dict, text: str) -> bool:
+        """Insert the carry-over block as a user message right behind the compaction summary (the last
+        `compaction` item, or the last hand-off message "Another language model started ...").
+
+        Codex does not know about the block, so the proxy re-inserts the identical item at the same
+        place in every request of the window (keeps the prompt-cache prefix stable).
+        """
+        items = body.get("input")
+        if not text or not isinstance(items, list):
+            return False
+        idx = None
+        starts = tuple(all_window_start_prefixes())
+        for i, it in enumerate(items):
+            if not isinstance(it, dict):
+                continue
+            if it.get("type") == "compaction":
+                idx = i                      # remote compaction: encrypted summary item
+            elif self._is_msg(it) and it.get("role") == "user" and starts \
+                    and _text(it.get("content")).lstrip().startswith(starts):
+                idx = i                      # local compaction: plain-text hand-off message
+        if idx is None:
+            return False
+        nxt = items[idx + 1] if idx + 1 < len(items) else None
+        if self._is_msg(nxt) and _text(nxt.get("content")).startswith(self.CARRY_MARK):
+            return False
+        items.insert(idx + 1, {"type": "message", "role": "user",
+                               "content": [{"type": "input_text", "text": text}]})
+        return True
+
     THREAD_HEADERS = ("x-codex-thread-id", "session_id", "conversation_id", "x-client-request-id")
 
     def session_key(self, body: dict, headers: dict | None = None) -> str:
@@ -398,6 +531,16 @@ class OpenAIResponses(Dialect):
         return sum(1 for it in self.messages(body) if self._is_msg(it) and it.get("role") == "assistant")
 
     def classify(self, body: dict) -> tuple[str, bool]:
+        # Codex >= 0.16x on the Responses wire compacts with a trailing {"type": "compaction_trigger"}
+        # input item (no summary prompt; the task text stays the last user message) and starts the
+        # next window with the returned {"type": "compaction", "encrypted_content": ...} item last.
+        items = self.messages(body)
+        last = items[-1] if items else None
+        if isinstance(last, dict):
+            if last.get("type") == "compaction_trigger":
+                return "summary", False
+            if last.get("type") == "compaction":
+                return "main", True
         kind, hint = super().classify(body)
         if kind == "main":
             t = self.last_user_text(body).lower()[:400]

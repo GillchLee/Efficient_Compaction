@@ -41,3 +41,25 @@ bash scripts/run_job.sh configs/sweep/<job>.yaml
 | FrontierSWE spice-circuit-simulator-in-rust | reward 0.030 (3/99), 압축 7, max prompt 117K, $0.15 | reward 0.061 (6/99), 압축 7, max prompt 32K, $0.21 |
 
 둘 다 네트워크 정책은 공식 그대로(컨테이너 안에서 github/pypi/apt 차단, 프록시 호스트만 통과 확인).
+
+## KernelBench (2026-11-13 준비, GPU)
+
+출처: Harbor PR #999 의 어댑터를 `scripts/kernelbench/` 에 가져와 수정(`SOURCE.md` 에 차이 목록). 문제는 KernelBench 저장소(커밋 423217d9) level 1–3 의 250개(100/100/50); level 4(HF 모델 20개)는 어댑터 미지원.
+
+```bash
+bash scripts/prep_kernelbench.sh --build-only          # optlimit/kernelbench-env:cu128 (nvidia/cuda 12.8.1 devel + torch 2.11 cu128 + KernelBench, ~10 GB)
+bash scripts/prep_kernelbench.sh --representative      # 35개 대표 과제 -> data/kernelbench/tasks (이미지 안에서 생성, 네트워크 불필요)
+bash scripts/prep_kernelbench.sh --level 1 --limit 5   # 또는 전체 250개: 인자 없이
+python configs/make_config.py --harness terminus-2-proxy --model openai/gpt-6-luna --balance \
+    --benchmark kernelbench --tasks kernelbench-level1-001-square-matrix-multiplication --hours 2
+KB_GPU=2 bash scripts/run_job.sh configs/sweep/<job>.yaml   # KB_GPU = 비어 있는 GPU 인덱스 (nvidia-smi)
+```
+
+| | KernelBench |
+|---|---|
+| 태스크 | 250 (level1 단일 연산 100, level2 융합 100, level3 전체 모델 50). 대표 부분집합 35 (18/8/9) |
+| 환경 | 공유 이미지 `optlimit/kernelbench-env:cu128` (task.toml `docker_image`, 빌드 없음), cpus 4 / 16 GB, **gpus 1**. `environment/docker-compose.yaml` 이 `KB_GPU` 로 장치를 고정 |
+| 네트워크 | 제한 없음(public). 에이전트는 /workspace 에서 작업, `/workspace/solution.py` 의 `ModelNew` 만 채점 |
+| 검증기 | 같은 컨테이너, `kernelbench.eval.eval_kernel_against_ref` (정확성 5회, 타이밍 100회 CUDA event, fp32 atol/rtol 1e-4, 10배 초과 속도는 의심 플래그). reward = 정확하면 speedup(ref/sol), 아니면 0; `fast_1` = 정확 ∧ speedup > 1 |
+| 예산 | 공식 에이전트 예산 없음(업스트림은 single-shot 생성 + 채점, 지표 fast_p). PR #999 는 600 s. 프리셋 기본 2 h (`--hours`) |
+| 주의 | 동시 trial 수 ≤ 비어 있는 GPU 수. 다른 사용자가 GPU 를 쓰는 동안은 타이밍(speedup)이 흔들리므로 비용·압축 지표만 믿고 speedup 은 참고치. 메모리 가드는 task.toml 16 GB 기준 |

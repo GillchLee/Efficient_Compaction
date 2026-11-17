@@ -31,7 +31,7 @@ def build_config(a):
     return ProxyConfig(
         anthropic_upstream=a.anthropic_upstream, openai_upstream=a.openai_upstream,
         trigger=a.trigger, signal_high=a.signal_high, signal_low_cap=a.signal_low_cap,
-        log_path=a.log, dump_dir=a.dump_dir,
+        log_path=a.log, dump_dir=a.dump_dir, dump_messages=a.dump_messages,
         inject_anthropic_key=os.environ.get("ANTHROPIC_API_KEY") if a.inject_keys else None,
         inject_openai_key=os.environ.get("OPENAI_API_KEY") if a.inject_keys else None,
         model_rewrite=dict(kv.split("=", 1) for kv in a.model_rewrite),
@@ -52,6 +52,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--spec-file", help="the same spec from a JSON file (--spec keys win)")
     ap.add_argument("--log", help="per-request JSONL log (usage, decision, reported prompt)")
     ap.add_argument("--dump-dir", help="per-request text dumps (classification debugging)")
+    ap.add_argument("--dump-messages", action="store_true",
+                    default=bool(os.environ.get("OPTLIMIT_PROXY_DUMP_MESSAGES")),
+                    help="with --dump-dir: also store the full message array and instructions (large); "
+                         "env OPTLIMIT_PROXY_DUMP_MESSAGES=1")
     ap.add_argument("--signal-high", type=int, default=950_000,
                     help="prompt size reported when the controller says compact (above the harness threshold)")
     ap.add_argument("--signal-low-cap", type=int, default=50_000,

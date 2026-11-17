@@ -62,6 +62,15 @@ def resolve_benchmark(a: argparse.Namespace) -> tuple[dict, float, str | None, s
     return dataset, hours, cont, label
 
 
+def benchmark_environment(a: argparse.Namespace) -> dict:
+    """benchmarks.yaml `environment:` overrides for the job's environment block (kernelbench:
+    delete: false keeps its shared pre-built image; Harbor's delete: true removes images after
+    every trial). Empty for --tasks-dir / --dataset runs."""
+    if a.tasks_dir or a.dataset:
+        return {}
+    return dict(load_benchmarks()[a.benchmark or DEFAULT_BENCHMARK].get("environment") or {})
+
+
 def benchmark_extras(a: argparse.Namespace) -> tuple[str, dict]:
     """-> (harbor profile, {harness name: agent kwargs the benchmark's protocol asks for})."""
     preset: dict = {}

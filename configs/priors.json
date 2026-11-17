@@ -127,6 +127,36 @@
    "gamma": 1.0,
    "summary_out": 4500,
    "_detail": "Median post-compaction prompt 14.9K with cached prefix ~12.0K -> Lp (new write) ~2.9K. g median 868 (mean 2023). summary_out not logged in ATIF: codex-hub value used."
+  },
+  "codex-luna-low": {
+   "source": "proxy logs of this host, 2026-11-14..16, Codex CLI + GPT-6 Luna (new compaction_trigger format): jobs luna_tb21_cxlow_* (TB 2.1, reasoning low; 54 compactions in balance/formula, 67 later windows)",
+   "Lp": 1300,
+   "L0": 12500,
+   "g": 850,
+   "m": 1,
+   "gamma": 1.12,
+   "summary_out": 1280,
+   "_detail": "Summary call output median 1277; uncached part of the next window's first prompt median 1282 (= the summary); first prompt of later windows median 13.8K -> cached prefix ~12.5K; uncached fraction of the summary call input 0.014 -> gamma 1.12 at alpha 10. g mean 852 (median 411)."
+  },
+  "codex-luna-medium": {
+   "source": "proxy logs of this host, 2026-11-14..16, Codex CLI + GPT-6 Luna (new compaction_trigger format): jobs luna_tb21_cx_* and luna_swem_cx_* (TB 2.1 and SWE-Marathon, reasoning medium; 126 + 2174 compactions in balance/formula)",
+   "Lp": 1700,
+   "L0": 11500,
+   "g": 2000,
+   "m": 1,
+   "gamma": 1.4,
+   "summary_out": 1700,
+   "_detail": "Summary output median 1684 (TB 2.1) / 1698 (SWE-Marathon); next-window uncached median 1690 / 1703; first prompt of later windows 14.2K / 12.2K -> cached prefix 10.5-12.5K; uncached fraction of the summary input 0.026 / 0.060 -> gamma 1.24 / 1.54. g mean 1414 (median 688) on TB 2.1, 2706 (1486) on SWE-Marathon: task dependent, learned online."
+  },
+  "codex-luna-max": {
+   "source": "proxy logs of this host, 2026-11-14..16, Codex CLI + GPT-6 Luna (new compaction_trigger format): jobs luna_tb4s_cxmax_* (TB 4.0 22-task split, reasoning max; 1127 compactions in balance/formula)",
+   "Lp": 2660,
+   "L0": 12600,
+   "g": 5300,
+   "m": 1,
+   "gamma": 1.73,
+   "summary_out": 2660,
+   "_detail": "Summary output median 2659; next-window uncached median 2664; first prompt of later windows median 15.3K -> cached prefix ~12.6K; uncached fraction of the summary input 0.081 -> gamma 1.73. g mean 5314 (median 4322). codex-luna-hub (Hub trajectories at max) had Lp 2900 right but borrowed summary_out 4500 from codex-hub and gamma 1.0."
   }
  }
 }

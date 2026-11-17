@@ -24,8 +24,10 @@ follow the ratios instead of freezing them at start-up:
   gamma is re-derived from the observed uncached fraction when `learn_gamma` is on,
   so a new alpha propagates into the summary-read term as well.
 * `learn_lp` / `learn_summary_out` / `learn_gamma` replace the prior Lp, O_s and
-  gamma by shrunken means of what the session's own compactions showed
-  (prior weight `learn_weight` compactions), so C - and with it L* - tracks the
+  gamma by what the session's own compactions showed - by default the mean of the last
+  `learn_recent` (3) compactions, the prior only until the first one; `learn_recent: 0`
+  restores the shrunken mean over the whole session (prior weight `learn_weight`
+  compactions) - so C - and with it L* - tracks the
   actual hand-off size and cache behaviour of this model/harness.
 
 Every Decision carries the alpha/beta/gamma/Lp/summary_out it was computed with.
@@ -37,6 +39,18 @@ Compact when the accumulated rent of the window reaches C.  With constant growth
 fires at exactly the closed-form L*; with bursty growth it reacts to the tokens actually
 re-read instead of to a mean, needs no g estimate (lookahead 0), and is 2-competitive
 against the offline optimum for any increment sequence (Dooly-Goldman-Scott 2001).
+
+Re-reads after a compaction (optlimit/reread.py detects them) feed three separate options:
+
+* Re-read Charge (`reread_charge`, default on; old name `reread_cost`): the re-read calls of
+  a window are charged to the compaction that caused them, C += R.  Changes *when* to compact.
+* File Carry-over (`carry_files` > 0, default off; optlimit/carry.py): the latest read output
+  of the files the agent keeps re-reading is attached behind the summary.  Changes *what* a
+  compaction hands over; the controller only carries the budget.
+* Net rent (`rent_net_reread`, balance mode, default off): the prompt growth of re-read
+  calls is left out of the rent.  Re-read Charge already counts those calls inside C, and
+  re-reads cluster right after a compaction, so counting them in the rent as well made
+  balance fire at 0.90-0.93 of L* on front-loaded windows (SWE-Marathon 2026-11-16).
 """
 from __future__ import annotations
 
@@ -80,7 +94,23 @@ class ControllerConfig:
     learn_lp: bool = False         # Lp from prompt - cached at each window start
     learn_summary_out: bool = False  # summary_out from the summarization calls' completion tokens
     learn_gamma: bool = False      # gamma = 1 + (alpha - 1) * uncached fraction of the summary calls' input
-    learn_weight: float = 2.0      # prior weight in compactions
+    learn_weight: float = 2.0      # prior weight in compactions (used when learn_recent == 0)
+    learn_recent: int = 3          # > 0: mean of the last N observed compactions, the prior is dropped after the
+                                   # first one; 0: shrunken mean over the whole session (prior weight learn_weight)
+    # re-reads after a compaction (optlimit/reread.py): the model calls a window spends reading again
+    # files it had already seen before the compaction are charged to that compaction, C += R.
+    # R = mean over the prior and the cost of those calls in the last `learn_recent` windows the
+    # harness adapter / proxy reported (note_reread); the prior is reread_turns * (per-turn cost at
+    # L* + beta * reread_turn_out) and counts as one window.  Measured 2026-11 (Codex + GPT-6 Luna, TB 2.1 / TB4 / SWE-Marathon):
+    # 2.3-4.0 such calls per compaction regardless of benchmark, effort and limit.
+    reread_charge: bool = True     # "Re-read Charge"
+    reread_cost: bool | None = None  # deprecated alias of reread_charge (older configs / spec files)
+    reread_turns: float = 3.5
+    reread_turn_out: float = 300.0
+    # "File Carry-over": token budget of the block of earlier read outputs the proxy / terminus-2
+    # adapter puts behind the summary for frequently re-read files (0 = off; optlimit/carry.py)
+    carry_files: int = 0
+    carry_item_tokens: int = 3000
     # minimum window from information loss: a compaction costs `reacq_turns` extra turns of
     # re-acquisition (analysis/reacquisition.py); keep that share of turns below reacq_eps,
     # i.e. K >= reacq_turns / reacq_eps, and charge those turns in the per-turn cost
@@ -98,6 +128,15 @@ class ControllerConfig:
     # prompt; "handoff" = max(first prompt, L0 + Lp), i.e. what a compaction would restart from
     # (differs only in the very first window, which starts near L0 without a hand-off).
     rent_base: str = "window_start"
+    # balance mode, "Net rent": leave the prompt growth of re-read calls (the reply after a
+    # call the re-read tracker flagged, note_reread_growth) out of the rent - the baseline
+    # moves up by that growth.  Independent of reread_charge, meant to be used with it.
+    rent_net_reread: bool = False
+
+    def __post_init__(self) -> None:
+        if self.reread_cost is not None:          # old spelling wins only when given explicitly
+            self.reread_charge = bool(self.reread_cost)
+            self.reread_cost = None
 
 
 @dataclass
@@ -116,7 +155,9 @@ class Decision:
     Lp: float | None = None
     summary_out: float | None = None
     rent: float | None = None      # balance mode: re-read tokens accumulated in this window
+    rr_growth: float | None = None # balance mode: prompt growth of re-read calls in this window
     C: float | None = None         # balance mode: cost of one compaction (read units)
+    reread: float | None = None    # the re-read term R inside C (read units); None when off
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -143,9 +184,13 @@ class SessionState:
     lp_obs: list[float] = field(default_factory=list)
     so_obs: list[float] = field(default_factory=list)
     unc_obs: list[float] = field(default_factory=list)   # uncached fraction of summary-call input
+    rr_turn_obs: list[float] = field(default_factory=list)  # re-read model calls per finished window
+    rr_cost_obs: list[float] = field(default_factory=list)  # their cost (read units)
     window_start_prompt: float | None = None
     window_turns: int = 0
     rent: float = 0.0             # balance mode: sum over the window of (P_t - P_start)
+    rr_growth: float = 0.0        # prompt growth of this window's re-read calls (Net rent)
+    rr_growth_next: bool = False  # the next main prompt's increment comes from a re-read call
     _summ_prompt: float = 0.0     # accumulated over the calls of the compaction in progress
     _summ_cached: float = 0.0
     _summ_out: float = 0.0
@@ -181,6 +226,33 @@ class LimitController:
         s._summ_cached += float(cached)
         s._summ_out += float(completion)
 
+    def note_reread(self, key: str, turns: float, cost: float) -> None:
+        """Re-read calls of a window that followed a compaction, and their cost in read units."""
+        s = self.session(key)
+        s.rr_turn_obs.append(float(turns))
+        s.rr_cost_obs.append(float(cost))
+
+    def note_reread_growth(self, key: str) -> None:
+        """The tool calls whose output the next main prompt carries included a re-read (Net rent)."""
+        self.session(key).rr_growth_next = True
+
+    def call_cost(self, prompt: float, cached: float = 0.0, output: float = 0.0) -> float:
+        """Cost of one model call in cache-read units."""
+        c = self.cfg
+        return float(cached) + c.alpha * max(float(prompt) - float(cached), 0.0) + c.beta * float(output)
+
+    def reread_term(self, s: SessionState, p: Params) -> float:
+        """Re-read Charge: R, what the re-reads after one compaction cost (read units)."""
+        c = self.cfg
+        if not c.reread_charge or c.mode in ("off", "fixed"):
+            return 0.0
+        L = best_threshold(p)
+        per_turn = (f(L, p) if L is not None and math.isfinite(f(L, p)) else p.L0 + p.Lp) + c.beta * c.reread_turn_out
+        prior = c.reread_turns * per_turn
+        obs = s.rr_cost_obs[-int(c.learn_recent):] if c.learn_recent and c.learn_recent > 0 else s.rr_cost_obs
+        # re-reads per window vary a lot (0 .. 10+), so the prior keeps the weight of one window
+        return max((prior + sum(obs)) / (1 + len(obs)), 0.0)
+
     def _flush_compaction_obs(self, s: SessionState, prompt: float, cached: float) -> None:
         if prompt - cached > 0:
             s.lp_obs.append(prompt - cached)
@@ -191,8 +263,16 @@ class LimitController:
         s._summ_prompt = s._summ_cached = s._summ_out = 0.0
 
     def _shrunk(self, prior: float, obs: list[float]) -> float:
+        if not obs:
+            return prior
+        n = int(self.cfg.learn_recent or 0)
+        if n > 0:
+            # Summary size barely drifts within a session (CV 0.2-0.3) but the prior can be 2-3x off,
+            # and most sessions see only a few compactions: trust the session's own recent values at once.
+            recent = obs[-n:]
+            return sum(recent) / len(recent)
         w = self.cfg.learn_weight
-        return (w * prior + sum(obs)) / (w + len(obs)) if obs else prior
+        return (w * prior + sum(obs)) / (w + len(obs))
 
     def Lp(self, s: SessionState) -> float:
         return self._shrunk(self.cfg.Lp, s.lp_obs) if self.cfg.learn_lp else self.cfg.Lp
@@ -233,8 +313,19 @@ class LimitController:
         if L0 is None:
             return None
         c = self.cfg
-        return Params(L0=L0, Lp=self.Lp(s), g=s.g.value, alpha=c.alpha, beta=c.beta, phi=c.phi,
-                      m=c.m, gamma=self.gamma(s), summary_out=self.summary_out(s), summary_fixed=c.summary_fixed)
+        p = Params(L0=L0, Lp=self.Lp(s), g=s.g.value, alpha=c.alpha, beta=c.beta, phi=c.phi,
+                   m=c.m, gamma=self.gamma(s), summary_out=self.summary_out(s), summary_fixed=c.summary_fixed)
+        R = self.reread_term(s, p)
+        return replace(p, summary_fixed=p.summary_fixed + R) if R > 0 else p
+
+    def reread_value(self, s: SessionState) -> float | None:
+        """The re-read term currently inside C, for the decision log."""
+        if not self.cfg.reread_charge or self.cfg.mode in ("off", "fixed") or self.L0(s) is None:
+            return None
+        c = self.cfg
+        p = Params(L0=self.L0(s), Lp=self.Lp(s), g=s.g.value, alpha=c.alpha, beta=c.beta, phi=c.phi,
+                   m=c.m, gamma=self.gamma(s), summary_out=self.summary_out(s), summary_fixed=c.summary_fixed)
+        return self.reread_term(s, p)
 
     def rent_base(self, s: SessionState, prompt: float) -> float:
         base = s.window_start_prompt if s.window_start_prompt is not None else prompt
@@ -242,6 +333,8 @@ class LimitController:
             L0 = self.L0(s)
             if L0 is not None:
                 base = max(base, L0 + self.Lp(s))
+        if self.cfg.rent_net_reread:
+            base += s.rr_growth
         return base
 
     def k_min(self) -> int:
@@ -316,6 +409,7 @@ class LimitController:
             s.window_start_prompt = prompt
             s.window_turns = 1
             s.rent = 0.0
+            s.rr_growth = 0.0
         elif s.expect_boundary or window_start_hint or (
             s.last_main_prompt is not None and prompt < c.boundary_ratio * s.last_main_prompt
             and s.last_main_prompt > (s.first_prompt or 0) + 2 * s.g.value
@@ -329,11 +423,15 @@ class LimitController:
             s.window_start_prompt = prompt
             s.window_turns = 1
             s.rent = 0.0
+            s.rr_growth = 0.0
         elif s.last_main_prompt is not None:
             s.g.add(prompt - s.last_main_prompt)
             s.window_turns += 1
+            if s.rr_growth_next:
+                s.rr_growth += max(prompt - s.last_main_prompt, 0.0)
             s.rent += max(prompt - self.rent_base(s, prompt), 0.0)
         s.expect_boundary = False
+        s.rr_growth_next = False
         s.last_main_prompt = prompt
 
         limit, reason = self.limit(s)
@@ -369,7 +467,8 @@ class LimitController:
         d = Decision(compact_now=compact, limit=limit, g_hat=g_hat, L0=self.L0(s), window_idx=s.window_idx,
                      turn_idx=s.turn_idx, window_start=window_start, reason=reason,
                      alpha=c.alpha, beta=c.beta, gamma=self.gamma(s), Lp=self.Lp(s), summary_out=self.summary_out(s),
-                     rent=rent, C=C)
+                     rent=rent, C=C, reread=self.reread_value(s),
+                     rr_growth=s.rr_growth if c.mode == "balance" else None)
         s.last_decision = d
         s.prompts.append(prompt); s.kinds.append(kind); s.limits.append(limit)
         return d

@@ -66,6 +66,13 @@ from pathlib import Path
 from harbor.agents.terminus_2.terminus_2 import Terminus2
 
 from ..controller import LimitController, config_from_spec, load_prices
+from ..dialects import _keystrokes
+from ..carry import disk_block
+from ..reread import RereadTracker
+
+import re
+
+_CD = re.compile(r"(?:^|[;&|\n]\s*)cd\s+(\S+)")
 from .terminus2_handoff import HandoffPromptsMixin
 
 class OptlimitTerminus2(HandoffPromptsMixin, Terminus2):
@@ -82,6 +89,8 @@ class OptlimitTerminus2(HandoffPromptsMixin, Terminus2):
         self._ol_key = "main"
         self._ol_seen = None          # last UsageInfo object the controller has consumed
         self._ol_boundary = False     # a summarization happened: the next prompt starts a window
+        self._ol_rr = RereadTracker()  # re-reads after a compaction (cost term; carry-over when carry_files > 0)
+        self._ol_dirs: list[str] = []  # directories the agent cd'ed to, newest first
         self._ol_path = Path(logs_dir) / "optlimit_decisions.jsonl"
         self.logger.info(f"optlimit controller: {self._ol_cfg}; handoff: {self._handoff or 'stock'}")
 
@@ -145,6 +154,13 @@ class OptlimitTerminus2(HandoffPromptsMixin, Terminus2):
         self._ol_boundary = False
         rec = {"ts": time.time(), "prompt": usage.prompt_tokens, "cached": usage.cache_tokens,
                **d.as_dict(), "action": None}
+        try:
+            if self._ol_note_commands(chat, usage):
+                rec["reread_turn"] = True
+                # its output is in the next prompt: Net rent leaves that growth out of the rent
+                self._ctl.note_reread_growth(self._ol_key)
+        except Exception as e:  # tracking must never break the run
+            self.logger.warning(f"optlimit: re-read tracking failed: {e}")
         if reloaded:
             rec["prices_reloaded"] = reloaded
 
@@ -164,5 +180,46 @@ class OptlimitTerminus2(HandoffPromptsMixin, Terminus2):
         if result:
             self._ctl.note_kind(self._ol_key, "summary")
             self._ol_boundary = True
+            w, turns, cost = self._ol_rr.start_window()
+            if w >= 1:
+                self._ctl.note_reread(self._ol_key, turns, cost)
+            rec["reread_window"] = {"window": w, "turns": turns, "cost": round(cost)}
+            if self._ol_cfg.carry_files > 0:
+                try:
+                    block, files = await self._ol_carry_block(session)
+                    if block:
+                        result = (result[0] + "\n\n" + block, result[1])
+                        rec["carry"] = {"chars": len(block), "files": files}
+                except Exception as e:
+                    self.logger.warning(f"optlimit: carry-over failed: {e}")
         self._ol_log(rec)
         return result
+
+    # ------------------------------------------------------------------ re-reads after a compaction
+    def _ol_note_commands(self, chat, usage) -> bool:
+        """Feed the commands of the newest assistant reply to the re-read tracker."""
+        last = next((m for m in reversed(chat.messages) if isinstance(m, dict) and m.get("role") == "assistant"), None)
+        if last is None:
+            return False
+        content = last.get("content")
+        text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+        for ks in _keystrokes(text):
+            self._ol_rr.observe(None, "keystrokes", ks)
+            for m in _CD.finditer(ks):          # remember where the agent works: relative paths resolve there
+                d = m.group(1).strip("\"'")
+                if d.startswith("/"):
+                    if d in self._ol_dirs:
+                        self._ol_dirs.remove(d)
+                    self._ol_dirs.insert(0, d)
+                    del self._ol_dirs[6:]
+        cost = self._ctl.call_cost(float(usage.prompt_tokens or 0), float(usage.cache_tokens or 0),
+                                   float(usage.completion_tokens or 0))
+        return self._ol_rr.close_turn(cost)
+
+    async def _ol_carry_block(self, session) -> tuple[str, list[str]]:
+        """File Carry-over: current contents of the files the agent keeps re-reading (optlimit/carry.py)."""
+        async def run(cmd: str) -> tuple[int, str]:
+            res = await session.environment.exec(command=cmd, timeout_sec=20)
+            return res.return_code, res.stdout or ""
+        c = self._ol_cfg
+        return await disk_block(self._ol_rr, run, self._ol_dirs, c.carry_files, c.carry_item_tokens)

@@ -35,3 +35,17 @@ def test_codex_summary_and_handoff_detection():
     later = {"input": [ENV, hand, {"type": "function_call", "name": "shell", "arguments": "{}", "call_id": "c"},
                        {"type": "function_call_output", "call_id": "c", "output": "ok"}]}
     assert d.classify(later) == ("main", False)
+
+
+def test_codex_compaction_trigger_item_is_a_summary_call():
+    """Codex 0.16x: compaction request = same input + a trailing compaction_trigger item; the next
+    window ends with the returned compaction item (seen live 2026-11-14, gpt-6-luna)."""
+    d = OpenAIResponses()
+    task = _msg("user", "fix the build")
+    call = {"type": "custom_tool_call", "name": "exec"}
+    out = {"type": "custom_tool_call_output", "output": "ok"}
+    assert d.classify({"input": [ENV, task, call, out]}) == ("main", False)
+    assert d.classify({"input": [ENV, task, call, out, {"type": "compaction_trigger"}]}) == ("summary", False)
+    new_window = {"input": [ENV, task, {"type": "compaction", "id": "cmp_1", "encrypted_content": "x"}]}
+    assert d.classify(new_window) == ("main", True)
+    assert d.classify({"input": new_window["input"] + [call, out]}) == ("main", False)

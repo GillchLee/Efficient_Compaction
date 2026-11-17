@@ -72,7 +72,7 @@ upstream = Starlette(routes=[Route("/v1/messages", anthropic, methods=["POST"]),
 def make(tmp_path, trigger, **ctl):
     cfg = ProxyConfig(anthropic_upstream="http://up", openai_upstream="http://up", trigger=trigger,
                       log_path=str(tmp_path / "log.jsonl"), signal_high=900_000, signal_low_cap=50_000,
-                      controller=ControllerConfig(**ctl), transport=httpx.ASGITransport(app=upstream))
+                      controller=ControllerConfig(reread_cost=False, **ctl), transport=httpx.ASGITransport(app=upstream))
     return create_app(cfg), cfg
 
 
@@ -174,7 +174,7 @@ async def test_summary_call_usage_feeds_balance_cost(tmp_path):
     """A harness compaction call seen by the proxy updates the learned terms of C (balance mode)."""
     app, cfg = make(tmp_path, "usage", mode="balance", g_prior=200, Lp=500, m=1.0, gamma=1.0,
                     summary_out=100.0, beta=50.0, alpha=10.0, min_window_turns=1,
-                    learn_lp=True, learn_summary_out=True, learn_weight=1.0)
+                    learn_lp=True, learn_summary_out=True, learn_weight=1.0, learn_recent=0)
     ctl = app.state.controller
     meta = {"metadata": {"user_id": json.dumps({"session_id": "S2"})}}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://p") as c:
@@ -268,8 +268,8 @@ async def test_orphan_summary_call_is_charged_to_the_compacting_session(tmp_path
     cfg = ProxyConfig(anthropic_upstream="http://up", openai_upstream="http://up", trigger="error",
                       log_path=str(tmp_path / "log.jsonl"), signal_high=900_000, signal_low_cap=50_000,
                       attach_orphan_summaries=True,
-                      controller=ControllerConfig(mode="fixed", fixed_limit=2500, g_prior=100, Lp=300,
-                                                  min_window_turns=1, learn_summary_out=True, learn_weight=1.0),
+                      controller=ControllerConfig(reread_cost=False, mode="fixed", fixed_limit=2500, g_prior=100, Lp=300,
+                                                  min_window_turns=1, learn_summary_out=True, learn_weight=1.0, learn_recent=0),
                       transport=httpx.ASGITransport(app=upstream))
     app = create_app(cfg)
     ctl = app.state.controller

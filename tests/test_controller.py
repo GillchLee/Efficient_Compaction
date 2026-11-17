@@ -14,7 +14,7 @@ def test_g_estimator_shrinks_to_prior_then_data():
 
 
 def test_controller_formula_triggers_and_tracks_windows():
-    cfg = ControllerConfig(mode="formula", Lp=8300, alpha=12.5, g_prior=1400, g_prior_weight=1, min_window_turns=2)
+    cfg = ControllerConfig(reread_cost=False, mode="formula", Lp=8300, alpha=12.5, g_prior=1400, g_prior_weight=1, min_window_turns=2)
     ctl = LimitController(cfg)
     key = "s"
     P = 900.0
@@ -43,7 +43,7 @@ def test_controller_formula_triggers_and_tracks_windows():
 
 
 def test_boundary_detected_from_prompt_drop_without_hint():
-    ctl = LimitController(ControllerConfig(mode="off", g_prior=1000))
+    ctl = LimitController(ControllerConfig(reread_cost=False, mode="off", g_prior=1000))
     for P in (1000, 2000, 3000, 30000, 31000):
         ctl.on_prompt("k", "main", float(P))
     d = ctl.on_prompt("k", "main", 9000.0)
@@ -51,7 +51,7 @@ def test_boundary_detected_from_prompt_drop_without_hint():
 
 
 def test_no_prior_waits_for_first_growth_then_uses_observed_mean():
-    ctl = LimitController(ControllerConfig(mode="formula", Lp=4400, alpha=10, beta=50, m=2, summary_out=4200,
+    ctl = LimitController(ControllerConfig(reread_cost=False, mode="formula", Lp=4400, alpha=10, beta=50, m=2, summary_out=4200,
                                            g_prior=5000, g_prior_weight=0, min_window_turns=2))
     d = ctl.on_prompt("k", "main", 1300.0)
     assert d.limit is None and d.reason == "no_g" and not d.compact_now
@@ -70,7 +70,7 @@ def test_no_prior_waits_for_first_growth_then_uses_observed_mean():
 
 
 def test_fixed_mode_lookahead():
-    ctl = LimitController(ControllerConfig(mode="fixed", fixed_limit=20000, Lp=1000, g_prior=1000, g_prior_weight=1000,
+    ctl = LimitController(ControllerConfig(reread_cost=False, mode="fixed", fixed_limit=20000, Lp=1000, g_prior=1000, g_prior_weight=1000,
                                            lookahead=1.0))
     ctl.on_prompt("k", "main", 500.0)
     assert not ctl.on_prompt("k", "main", 18500.0).compact_now
@@ -78,7 +78,7 @@ def test_fixed_mode_lookahead():
 
 
 def test_update_prices_moves_the_limit_and_is_recorded():
-    cfg = ControllerConfig(mode="formula", Lp=3203, L0_mode="fixed", L0_fixed=1258, alpha=10, beta=50,
+    cfg = ControllerConfig(reread_cost=False, mode="formula", Lp=3203, L0_mode="fixed", L0_fixed=1258, alpha=10, beta=50,
                            m=2.178, gamma=1.508, summary_out=4242, g_prior=717, g_prior_weight=5)
     ctl = LimitController(cfg)
     d1 = ctl.on_prompt("s", "main", 2000.0)
@@ -95,9 +95,9 @@ def test_update_prices_moves_the_limit_and_is_recorded():
 
 def test_learned_terms_track_observed_compactions():
     base = dict(mode="formula", Lp=3203, L0_mode="fixed", L0_fixed=1258, alpha=10, beta=50,
-                m=2.178, gamma=1.508, summary_out=4242, g_prior=717, g_prior_weight=5, learn_weight=1.0)
-    fixed = LimitController(ControllerConfig(**base))
-    learn = LimitController(ControllerConfig(**base, learn_lp=True, learn_summary_out=True, learn_gamma=True))
+                m=2.178, gamma=1.508, summary_out=4242, g_prior=717, g_prior_weight=5, learn_weight=1.0, learn_recent=0)
+    fixed = LimitController(ControllerConfig(reread_cost=False, **base))
+    learn = LimitController(ControllerConfig(reread_cost=False, **base, learn_lp=True, learn_summary_out=True, learn_gamma=True))
     for ctl in (fixed, learn):
         P = 2000.0
         ctl.on_prompt("s", "main", P)
@@ -124,15 +124,15 @@ def test_learned_terms_track_observed_compactions():
 def test_reacquisition_floor_raises_small_windows():
     base = dict(mode="formula", Lp=3203, L0_mode="fixed", L0_fixed=1258, alpha=1.5, beta=2.5,
                 m=2.178, gamma=1.03, summary_out=4242, g_prior=1000, g_prior_weight=5)
-    plain = LimitController(ControllerConfig(**base)).on_prompt("s", "main", 2000.0)
-    floored = LimitController(ControllerConfig(**base, reacq_turns=1.5, reacq_eps=0.1)).on_prompt("s", "main", 2000.0)
+    plain = LimitController(ControllerConfig(reread_cost=False, **base)).on_prompt("s", "main", 2000.0)
+    floored = LimitController(ControllerConfig(reread_cost=False, **base, reacq_turns=1.5, reacq_eps=0.1)).on_prompt("s", "main", 2000.0)
     # cheap prices (GLM-like) give a ~10K window; 1.5 re-acquired turns per compaction at <=10% => K >= 15
     assert plain.limit < 1258 + 3203 + 1000 * 14
     assert floored.limit >= 1258 + 3203 + 1000 * 14 and floored.reason == "floor_min_window"
     # at Luna prices the charge for re-acquired turns moves L* up a little but the floor does not bind
     luna = dict(base, alpha=10, beta=50, gamma=1.508)
-    a = LimitController(ControllerConfig(**luna)).on_prompt("s", "main", 2000.0)
-    b = LimitController(ControllerConfig(**luna, reacq_turns=1.5)).on_prompt("s", "main", 2000.0)
+    a = LimitController(ControllerConfig(reread_cost=False, **luna)).on_prompt("s", "main", 2000.0)
+    b = LimitController(ControllerConfig(reread_cost=False, **luna, reacq_turns=1.5)).on_prompt("s", "main", 2000.0)
     assert b.reason == "formula" and 1.02 < b.limit / a.limit < 1.2
 
 
@@ -160,8 +160,8 @@ def test_balance_rule_matches_formula_for_constant_growth_and_reacts_to_bursts()
     base = dict(Lp=3203, L0_mode="fixed", L0_fixed=1258, alpha=10, beta=50, m=2.178, gamma=1.508,
                 summary_out=4242, g_prior=1000, g_prior_weight=1000, lookahead=1)
     const = [1000.0] * 120
-    f_fired = _run(ControllerConfig(mode="formula", **base), const)
-    b_fired = _run(ControllerConfig(mode="balance", **base), const)
+    f_fired = _run(ControllerConfig(reread_cost=False, mode="formula", **base), const)
+    b_fired = _run(ControllerConfig(reread_cost=False, mode="balance", **base), const)
     assert len(f_fired) >= 2 and len(b_fired) >= 2
     # same window length (+-1 turn) once both start from L0 + Lp: the balance rule reproduces
     # the closed-form optimum (the very first window starts lower, so compare the second)
@@ -170,11 +170,11 @@ def test_balance_rule_matches_formula_for_constant_growth_and_reacts_to_bursts()
     # soon as the prompt passes L*, i.e. right after the burst; the balance rule waits until
     # the rent actually paid for re-reading it reaches C (DTAP: no bet on the future, 2-competitive)
     burst = [1000.0] * 3 + [15000.0] + [1000.0] * 116
-    f_b = _run(ControllerConfig(mode="formula", **base), burst)
-    b_b = _run(ControllerConfig(mode="balance", **base), burst)
+    f_b = _run(ControllerConfig(reread_cost=False, mode="formula", **base), burst)
+    b_b = _run(ControllerConfig(reread_cost=False, mode="balance", **base), burst)
     assert f_b[0] < b_b[0] < f_fired[0]
     # the decision record carries rent and C
-    ctl = LimitController(ControllerConfig(mode="balance", **base))
+    ctl = LimitController(ControllerConfig(reread_cost=False, mode="balance", **base))
     ctl.on_prompt("s", "main", 2000.0)
     d = ctl.on_prompt("s", "main", 3000.0)
     assert d.rent == 1000.0 and d.C is not None and d.C > 200000 and d.reason == "balance_ref"
@@ -183,8 +183,8 @@ def test_balance_rule_matches_formula_for_constant_growth_and_reacts_to_bursts()
 def test_formula_base_window_start_shifts_limit_to_realized_start():
     base = dict(Lp=3203, L0_mode="fixed", L0_fixed=1258, alpha=10, beta=50, m=2.178, gamma=1.508,
                 summary_out=4242, g_prior=1000, g_prior_weight=1000, lookahead=0)
-    model = LimitController(ControllerConfig(mode="formula", **base))
-    real = LimitController(ControllerConfig(mode="formula", formula_base="window_start", **base))
+    model = LimitController(ControllerConfig(reread_cost=False, mode="formula", **base))
+    real = LimitController(ControllerConfig(reread_cost=False, mode="formula", formula_base="window_start", **base))
     # first window starts at 2K (no hand-off): same K*, limit lower by (L0 + Lp) - 2K
     dm = model.on_prompt("s", "main", 2000.0)
     dr = real.on_prompt("s", "main", 2000.0)
@@ -203,7 +203,7 @@ def test_formula_base_window_start_shifts_limit_to_realized_start():
 def test_balance_hard_cap_fires_before_rent_reaches_C():
     base = dict(Lp=3203, L0_mode="fixed", L0_fixed=1258, alpha=10, beta=50, m=2.178, gamma=1.508,
                 summary_out=4242, g_prior=1000, g_prior_weight=1000, lookahead=0)
-    ctl = LimitController(ControllerConfig(mode="balance", hard_cap=20000, **base))
+    ctl = LimitController(ControllerConfig(reread_cost=False, mode="balance", hard_cap=20000, **base))
     fired = None
     p = 4461.0
     for t in range(60):
@@ -218,11 +218,29 @@ def test_balance_hard_cap_fires_before_rent_reaches_C():
 def test_rent_base_handoff_ignores_growth_below_L0_plus_Lp_in_first_window():
     base = dict(Lp=3203, L0_mode="fixed", L0_fixed=1258, alpha=10, beta=50, m=2.178, gamma=1.508,
                 summary_out=4242, g_prior=1000, g_prior_weight=1000, lookahead=0)
-    ws = LimitController(ControllerConfig(mode="balance", **base))
-    ho = LimitController(ControllerConfig(mode="balance", rent_base="handoff", **base))
+    ws = LimitController(ControllerConfig(reread_cost=False, mode="balance", **base))
+    ho = LimitController(ControllerConfig(reread_cost=False, mode="balance", rent_base="handoff", **base))
     for ctl in (ws, ho):
         ctl.on_prompt("s", "main", 2000.0)
     d_ws = ws.on_prompt("s", "main", 5000.0)
     d_ho = ho.on_prompt("s", "main", 5000.0)
     assert d_ws.rent == 3000.0
     assert d_ho.rent == 5000.0 - (1258 + 3203)
+
+
+def test_learning_drops_the_prior_after_the_first_compaction_by_default():
+    base = dict(mode="formula", Lp=2900, L0_mode="fixed", L0_fixed=12000, alpha=10, beta=50, m=1, gamma=1.0,
+                summary_out=4500, g_prior=870, learn_lp=True, learn_summary_out=True, learn_gamma=True)
+    recent = LimitController(ControllerConfig(reread_cost=False, **base))                      # default: learn_recent = 3
+    shrunk = LimitController(ControllerConfig(reread_cost=False, **base, learn_recent=0))      # previous rule, prior weight 2
+    assert recent.cfg.learn_recent == 3
+    for ctl in (recent, shrunk):
+        s = ctl.session("s")
+        assert ctl.summary_out(s) == 4500 and ctl.Lp(s) == 2900
+        s.so_obs.append(1300.0)
+        s.lp_obs.append(1300.0)
+    assert recent.summary_out(recent.session("s")) == 1300 and recent.Lp(recent.session("s")) == 1300
+    assert abs(shrunk.summary_out(shrunk.session("s")) - (2 * 4500 + 1300) / 3) < 1e-6
+    # only the last three observations count
+    recent.session("s").so_obs.extend([1000.0, 2000.0, 3000.0])
+    assert recent.summary_out(recent.session("s")) == 2000

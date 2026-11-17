@@ -1,0 +1,12 @@
+# GPU pinning for a shared host: KB_GPU selects the device index (default 0).
+# Harbor merges this with its own compose files; an explicit device request here replaces
+# Harbor's `gpus = 1` count reservation.
+services:
+  main:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${KB_GPU:-0}"]
+              capabilities: [gpu]

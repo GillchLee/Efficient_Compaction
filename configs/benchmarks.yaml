@@ -13,6 +13,8 @@
 #              In-process terminus-2 (optlimit.harbor_agent) exists only on lhtb-fork; on "0.25" use
 #              --harness terminus-2-proxy | claude-code | codex.
 #   harness_kwargs: per-harness agent kwargs the benchmark's official protocol asks for.
+#   environment: overrides for the job's environment block (e.g. delete: false to keep a shared
+#              pre-built image between trials; Harbor's default delete: true removes it).
 
 lhtb1:
   description: Long-Horizon Terminal-Bench 1.0 (46 tasks, LHTB/tasks)
@@ -48,6 +50,22 @@ swe_marathon:
     claude-code: {disallowed_tools: "WebSearch WebFetch"}   # as in the benchmark's scripts/run-benchmark.sh
   proxy_tasks: 20 of 20 (16 use an agent egress allowlist; run_job.sh allowlists the proxy host); 5 tasks need an H100
 
+swebench_verified:
+  description: SWE-bench Verified (500 tasks, Harbor adapter; python scripts/prep_swebench.py [--subset hard] -> data/swebench-verified)
+  tasks_dir: ./data/swebench-verified
+  hours: 0.83334      # task.toml agent/verifier timeout 3000 s
+  continue_mode: phases
+  harbor: "0.25"
+  proxy_tasks: "500 of 500 (the grader installs swebench from PyPI, so the verifier needs internet)"
+
+swebench_verified_sif:
+  description: SWE-bench Verified, Singularity/Apptainer variant for hosts without Docker (python scripts/prep_swebench.py --singularity [--subset hard] -> data/swebench-verified-sif; use --env singularity)
+  tasks_dir: ./data/swebench-verified-sif
+  hours: 0.83334
+  continue_mode: phases
+  harbor: "0.25"
+  proxy_tasks: "500 of 500 (container shares the host network; the proxy is reached on 127.0.0.1)"
+
 frontier_swe_v2:
   description: FrontierSWE v2 (34 tasks, 20 h budget; git clone --depth 1 https://github.com/Proximal-Labs/frontier-swe-v2 data/frontier-swe-v2)
   tasks_dir: ./data/frontier-swe-v2/tasks
@@ -55,3 +73,12 @@ frontier_swe_v2:
   continue_mode: phases
   harbor: "0.25"
   proxy_tasks: tasks deny egress except allowed hosts (run_job.sh allowlists the proxy host); several need GPUs
+
+kernelbench:
+  description: KernelBench levels 1-3 (250 PyTorch->CUDA kernel tasks; bash scripts/prep_kernelbench.sh [--representative]; 1 GPU per trial, KB_GPU=<idx> pins the device)
+  tasks_dir: ./data/kernelbench/tasks
+  hours: 2            # no official agentic budget (upstream eval is single-shot generation); PR #999 used 600 s
+  continue_mode: phases
+  harbor: "0.25"
+  environment: {delete: false}   # shared pre-built image optlimit/kernelbench-env:cu128
+  proxy_tasks: all (environment network public; reward = speedup when correct, fast_1 = correct and speedup > 1)

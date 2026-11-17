@@ -59,7 +59,7 @@ HERE = Path(__file__).resolve().parent
 
 sys.path.insert(0, str(HERE))
 from _common import DEFAULT_HARBOR, add_benchmark_args, benchmark_extras, continue_env_line  # noqa: E402
-from _common import resolve_benchmark, short_model  # noqa: E402
+from _common import benchmark_environment, resolve_benchmark, short_model  # noqa: E402
 from _common import repo_relative as _repo_relative  # noqa: E402
 
 HARNESSES = ("terminus-2", "terminus-2-proxy", "claude-code", "codex")
@@ -85,13 +85,24 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--balance", metavar="PRIOR", help="optlimit balance (DTAP) mode with this prior")
     g.add_argument("--native-threshold", type=int, metavar="N")
     ap.add_argument("--prices", help="configs/prices.json row (formula mode)")
+    ap.add_argument("--no-reread-charge", action="store_true",
+                    help="Re-read Charge off: do not add the cost of post-compaction re-reads to C "
+                         "(on by default for formula/balance). Same as --set reread_charge=false")
+    ap.add_argument("--net-rent", action="store_true",
+                    help="balance only, Net rent: leave the prompt growth of re-read calls out of the rent. "
+                         "Same as --set rent_net_reread=true")
+    ap.add_argument("--carry-files", nargs="?", const="8000", metavar="TOKENS",
+                    help="File Carry-over: put earlier read output of the files the agent keeps re-reading behind each "
+                         "compaction summary, within this token budget (default 8000 when given without a value; "
+                         "off when absent). Same as --set carry_files=N")
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                     help="extra optlimit controller field (e.g. lookahead=1, g_prior_weight=3)")
     ap.add_argument("--handoff", action="append", default=[], metavar="KEY=VALUE",
                     help="hand-off length targets (summary_words, min_questions, answer_words); "
                          "stock terminus-2 prompts when absent")
     add_benchmark_args(ap)
-    ap.add_argument("--env", choices=["docker", "daytona"], default="docker")
+    ap.add_argument("--env", choices=["docker", "daytona"], default="docker",
+                    help="(singularity: Claude Code / Codex only, see make_harness_config.py)")
     ap.add_argument("--concurrent", type=int, default=1)
     ap.add_argument("--max-tokens", type=int, default=16384)
     ap.add_argument("--retries", type=int, default=6, help="litellm num_retries per call")
@@ -113,6 +124,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--jobs-dir", default="./jobs")
     ap.add_argument("--out")
     a = ap.parse_args(argv)
+    if a.net_rent and a.balance is None:
+        ap.error("--net-rent applies to --balance only")
+    if a.no_reread_charge:
+        a.set.append("reread_charge=false")
+    if a.net_rent:
+        a.set.append("rent_net_reread=true")
+    if a.carry_files:
+        a.set.append("carry_files=" + str(int(float(a.carry_files.lower().rstrip("k")) * (1000 if a.carry_files.lower().endswith("k") else 1))))
     dataset, hours, cont, bench = resolve_benchmark(a)
     harbor, _ = benchmark_extras(a)
     if harbor != DEFAULT_HARBOR:
@@ -214,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
         env_lines.append(kv)
 
     env: dict = {"type": a.env, "force_build": False, "delete": True}
+    env.update(benchmark_environment(a))   # benchmarks.yaml `environment:` (kernelbench: delete: false)
     if a.env == "daytona":
         env["kwargs"] = {"auto_stop_interval_mins": int(hours * 60) + 60, "auto_delete_interval_mins": 30}
 

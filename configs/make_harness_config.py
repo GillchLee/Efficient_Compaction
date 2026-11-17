@@ -28,7 +28,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
-from _common import (add_benchmark_args, benchmark_extras, continue_env_line, harbor_header_line,  # noqa: E402
+from _common import (add_benchmark_args, benchmark_environment, benchmark_extras, continue_env_line, harbor_header_line,  # noqa: E402
                      parse_sets, parse_tokens, repo_relative, resolve_benchmark, short_model)
 from optlimit import harnesses  # noqa: E402
 
@@ -49,6 +49,16 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--prices", help="configs/prices.json row (alpha, beta) for --balance/--formula")
     ap.add_argument("--learn", action="store_true",
                     help="learn Lp, summary output and gamma from this run's own compactions")
+    ap.add_argument("--no-reread-charge", action="store_true",
+                    help="Re-read Charge off: do not add the cost of post-compaction re-reads to C "
+                         "(on by default for formula/balance). Same as --set reread_charge=false")
+    ap.add_argument("--net-rent", action="store_true",
+                    help="balance only, Net rent: leave the prompt growth of re-read calls out of the rent. "
+                         "Same as --set rent_net_reread=true")
+    ap.add_argument("--carry-files", nargs="?", const="8000", metavar="TOKENS",
+                    help="File Carry-over: put earlier read output of the files the agent keeps re-reading behind each "
+                         "compaction summary, within this token budget (default 8000 when given without a value; "
+                         "off when absent). Same as --set carry_files=N")
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="extra controller field")
     ap.add_argument("--attach-orphan-summaries", action="store_true",
                     help="proxy: charge compaction calls with a new message root (terminus-2 questions "
@@ -57,11 +67,18 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--observe", action="store_true",
                     help="static modes: still run the proxy with trigger=off to log every call's usage")
     add_benchmark_args(ap)
-    ap.add_argument("--env", choices=["docker", "daytona"], default="docker")
+    ap.add_argument("--env", choices=["docker", "daytona", "singularity"], default="docker",
+                    help="singularity: Apptainer/Singularity on a host without Docker (Harbor 0.25 profile; tasks need "
+                         "[environment] docker_image, e.g. --benchmark swebench_verified_sif)")
+    ap.add_argument("--sif-cache", metavar="DIR",
+                    help="singularity: directory for the converted .sif images (default: $OPTLIMIT_SIF_CACHE at run "
+                         "time, else ./data/sif-cache)")
     ap.add_argument("--concurrent", type=int, default=1)
     ap.add_argument("--setup-timeout", type=int, metavar="SEC",
                     help="agent setup (CLI install in the container) timeout; default: the harness profile's, else Harbor's 360")
     ap.add_argument("--verifier-feedback", choices=["true", "false", "score"])
+    ap.add_argument("--reasoning-effort", choices=["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+                    help="agent kwarg reasoning_effort (Codex: -c model_reasoning_effort); default: the CLI's own")
     ap.add_argument("--job-name")
     ap.add_argument("--jobs-dir", default="./jobs")
     ap.add_argument("--out")
@@ -71,6 +88,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     ap = build_parser()
     a = ap.parse_args(argv)
+    if a.net_rent and a.balance is None:
+        ap.error("--net-rent applies to --balance only")
+    if a.no_reread_charge:
+        a.set.append("reread_charge=false")
+    if a.net_rent:
+        a.set.append("rent_net_reread=true")
+    if a.carry_files:
+        a.set.append("carry_files=" + str(int(float(a.carry_files.lower().rstrip("k")) * (1000 if a.carry_files.lower().endswith("k") else 1))))
     prof = harnesses.get(a.harness)
     priors = json.loads((HERE / "priors.json").read_text())["harness"]
     prices = json.loads((HERE / "prices.json").read_text())["models"]
@@ -121,20 +146,31 @@ def main(argv: list[str] | None = None) -> int:
     dataset, hours, cont, bench = resolve_benchmark(a)
     harbor, harness_kwargs = benchmark_extras(a)
     kwargs = {**kwargs, **(harness_kwargs.get(a.harness) or {})}
+    if a.reasoning_effort:
+        kwargs["reasoning_effort"] = a.reasoning_effort
     job = a.job_name or f"{a.harness}-{short_model(a.model)}_{cond}"
     out = Path(a.out) if a.out else HERE / "sweep" / f"{job}.yaml"
     agent = {**prof.agent, "model_name": a.model, "override_timeout_sec": int(hours * 3600), "kwargs": kwargs}
     setup_timeout = a.setup_timeout or prof.setup_timeout_sec
     if setup_timeout:
         agent["override_setup_timeout_sec"] = int(setup_timeout)
-    if harbor != "lhtb-fork" and prof.install_hosts:
-        # Harbor >= 0.20 egress allowlists: the CLI install has to get out of tasks that deny egress
+    if harbor != "lhtb-fork" and prof.install_hosts and a.env != "singularity":
+        # Harbor >= 0.20 egress allowlists (singularity shares the host network: none): the CLI install has to get out of tasks that deny egress
         # (the proxy host itself is added at launch by scripts/run_harness_job.sh)
         agent["extra_allowed_hosts"] = list(prof.install_hosts)
     env: dict = {"type": a.env, "force_build": False, "delete": True}
+    env.update(benchmark_environment(a))   # benchmarks.yaml `environment:` (kernelbench: delete: false)
     if a.env == "daytona":
         env["kwargs"] = {"auto_stop_interval_mins": int(hours * 60) + 60, "auto_delete_interval_mins": 30}
-    if harbor != "lhtb-fork" and prof.install_hosts:
+    if a.env == "singularity":
+        if harbor == "lhtb-fork":
+            ap.error("--env singularity needs the Harbor 0.25 profile (--harbor 0.25 or a 0.25 benchmark)")
+        # singularity_no_mount: Harbor's default "home,tmp,bind-paths" also drops /etc/resolv.conf, so the
+        # container has no DNS (agent install, uv/pip in the grader fail); keep the system bind paths
+        env["kwargs"] = {"singularity_image_cache_dir": a.sif_cache or "./data/sif-cache",
+                         "singularity_no_mount": "home,tmp"}
+        env["delete"] = False          # nothing to delete; keeps the .sif cache
+    elif harbor != "lhtb-fork" and prof.install_hosts:
         env["extra_allowed_hosts"] = list(prof.install_hosts)   # agent setup runs under the environment baseline
     cfg = {"job_name": job, "jobs_dir": a.jobs_dir, "n_attempts": 1, "n_concurrent_trials": a.concurrent,
            "timeout_multiplier": 1.0, "environment": env, "agents": [agent], "datasets": [dataset]}
