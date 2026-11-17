@@ -4,6 +4,7 @@
     python scripts/prep_swebench.py                                  # docker:      data/swebench-verified
     python scripts/prep_swebench.py --singularity                    # singularity: data/swebench-verified-sif
     python scripts/prep_swebench.py --singularity --subset hard      # only the 45 tasks labelled 1-4 h / >4 h
+    python scripts/prep_swebench.py --singularity --subset hard --pull   # + convert their images to .sif now
 
 The tasks come from laude-institute/harbor-datasets at the commit the Harbor registry pins
 (sparse checkout into data/_src/harbor_datasets, ~30 MB).  Every task image is a public
@@ -76,6 +77,12 @@ def main() -> int:
     ap.add_argument("--tasks", nargs="*", help="explicit task names (instead of --subset)")
     ap.add_argument("--src", type=Path, default=ROOT / "data/_src/harbor_datasets")
     ap.add_argument("--out", type=Path, help="default data/swebench-verified[-sif]")
+    ap.add_argument("--pull", action="store_true",
+                    help="singularity: convert the tasks' images to .sif now, one at a time, under the names Harbor "
+                         "looks for (skips existing ones); runs then start without pulls and arms never race")
+    ap.add_argument("--sif-cache", type=Path, default=ROOT / "data/sif-cache",
+                    help="where --pull puts the .sif files (same as make_config --sif-cache; default data/sif-cache)")
+    ap.add_argument("--keep-oci", action="store_true", help="--pull: keep the OCI layer cache (default: delete it, ~half the disk)")
     a = ap.parse_args()
     tasks_dir = fetch(a.src)
     out = a.out or ROOT / ("data/swebench-verified-sif" if a.singularity else "data/swebench-verified")
@@ -98,7 +105,51 @@ def main() -> int:
             convert(dst)
     print(f"{len(names)} tasks -> {out.relative_to(ROOT) if out.is_relative_to(ROOT) else out}"
           f"{' (singularity variant)' if a.singularity else ''}")
+    if a.pull:
+        return pull(out, names, a.sif_cache, a.keep_oci)
     return 0
+
+
+def pull(out: Path, names: list[str], cache: Path, keep_oci: bool) -> int:
+    """Pre-convert images under Harbor's cache names (harbor/environments/singularity: <image with / and : -> _>.sif)."""
+    import os
+    import time
+    cache.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    oci = Path(env.get("APPTAINER_CACHEDIR") or env.get("SINGULARITY_CACHEDIR") or cache / "oci")
+    env.setdefault("APPTAINER_CACHEDIR", str(oci))
+    env.setdefault("SINGULARITY_CACHEDIR", str(oci))
+    images = []
+    for n in names:
+        m = re.search(r'^docker_image\s*=\s*"([^"]+)"', (out / n / "task.toml").read_text(), re.M)
+        if m and m.group(1) not in images:
+            images.append(m.group(1))
+    failed = []
+    for i, img in enumerate(images, 1):
+        full = img if ":" in img.rsplit("/", 1)[-1] else img + ":latest"
+        sif = cache / (full.replace("/", "_").replace(":", "_") + ".sif")
+        if sif.exists():
+            print(f"[{i}/{len(images)}] cached {sif.name}")
+            continue
+        tmp = sif.with_suffix(".sif.tmp.prep")
+        t0 = time.time()
+        r = subprocess.run(["singularity", "-q", "pull", "--force", str(tmp), f"docker://{full}"], env=env,
+                           capture_output=True, text=True)
+        if r.returncode == 0 and tmp.exists():
+            tmp.rename(sif)
+            print(f"[{i}/{len(images)}] {full} {sif.stat().st_size / 1e9:.1f} GB {time.time() - t0:.0f} s")
+        else:
+            tmp.unlink(missing_ok=True)
+            failed.append(full)
+            print(f"[{i}/{len(images)}] FAILED {full}: {(r.stderr or r.stdout).strip()[-300:]}")
+            if "toomanyrequests" in (r.stderr or "") or "rate limit" in (r.stderr or "").lower():
+                print("Docker Hub rate limit: log in (apptainer registry login --username <user> docker://docker.io) "
+                      "or wait, then rerun --pull (finished images are kept)")
+                break
+        if not keep_oci and oci.is_dir():
+            shutil.rmtree(oci, ignore_errors=True)
+    print(f"{len(images) - len(failed)}/{len(images)} images in {cache}")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

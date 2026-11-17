@@ -25,9 +25,11 @@ container has no DNS (Harbor's in-container server cannot install pip, the grade
   package from the PPA/.deb installs the profile that allows them (an admin install).
 * `uv`, `git`, `curl`; outbound HTTPS to Docker Hub, PyPI, astral.sh, api.openai.com.
 * RAM: about 8 GB per concurrent SWE-bench trial (4 GB task + writable layer + agent).
-* Disk: `.sif` images 0.5-3 GB each; the 45-task `hard` subset needs roughly 60-100 GB.
-* Docker Hub limits anonymous pulls (about 100 per 6 h): for more images,
-  `singularity remote login --username <user> docker://docker.io` first.
+* Disk: `.sif` images ~1 GB each (measured 1.0-1.1 GB); the 45-task `hard` subset ~45-60 GB,
+  all 500 ~0.5 TB. `--pull` deletes the OCI layer cache after each image.
+* Docker Hub pull limits (2025 policy, check the current one): anonymous about 10 per hour per IP,
+  free account about 100 per hour. Log in before pulling more than a few images:
+  `apptainer registry login --username <user> docker://docker.io` (token as password).
 
 `bash scripts/check_server.sh` checks all of this (pulls alpine once, runs one container) and
 prints PASS / WARN / FAIL.
@@ -45,7 +47,9 @@ cd <dir>/Efficient_Compaction_new
 patch -p1 < patches/singularity-run-scripts.patch            # until merged into scripts/ (see below)
 bash setup.sh --profile harbor25                             # .venv-h25: Harbor 0.25.0 + optlimit[proxy]
 bash scripts/check_server.sh
-.venv-h25/bin/python scripts/prep_swebench.py --singularity --subset hard   # 45 tasks -> data/swebench-verified-sif
+.venv-h25/bin/python scripts/prep_swebench.py --singularity --subset hard --pull
+#   45 tasks -> data/swebench-verified-sif, and their 45 images -> data/sif-cache (~55 s / ~1 GB each);
+#   rerun after a rate-limit stop: finished images are kept
 ```
 
 `--subset hard` = the tasks labelled "1-4 hours" (42) or ">4 hours" (3), the longest trajectories;
@@ -67,6 +71,18 @@ APPTAINER_CACHEDIR=$PWD/data/sif-cache/oci .venv-h25/bin/harbor run -p data/sweb
   --job-name swev_cx_formula --out configs/sweep/swev_cx_formula.yaml
 setsid nohup bash scripts/run_job.sh configs/sweep/swev_cx_formula.yaml >jobs/logs/swev_cx_formula.chain.log 2>&1 &
 ```
+
+### Hard subset, all arms, two attempts each
+
+```bash
+CONC=6 setsid nohup bash scripts/run_swev_hard.sh >/dev/null 2>&1 &
+tail -f jobs/logs/swev_hard_cx.chain.log
+```
+
+Arms native / fixed 80K / formula / balance + Net rent run in parallel (`ARMS=...` to change;
+also `l40k`, `balance`, `formula_carry`), each 45 tasks x `ATTEMPTS` (2), `CONC` trials at a time per
+arm. RAM ~ arms x CONC x 8 GB (4 arms x 6 = 24 trials ~ 190 GB). Time ~ 45 x 2 x 25 min / CONC per arm
+(CONC 6: about 6-7 h). Codex reasoning effort `EFFORT` (default medium, prior codex-luna-medium).
 
 Other arms: `--limit native`, `--proxy-fixed 80k`, `--balance codex-luna-medium [--net-rent]`,
 `--carry-files`. Several arms can run at once: each has its own proxy port; keep

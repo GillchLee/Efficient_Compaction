@@ -104,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--env", choices=["docker", "daytona"], default="docker",
                     help="(singularity: Claude Code / Codex only, see make_harness_config.py)")
     ap.add_argument("--concurrent", type=int, default=1)
+    ap.add_argument("--attempts", type=int, default=1, help="n_attempts: runs of every task (repeats for a mean)")
     ap.add_argument("--max-tokens", type=int, default=16384)
     ap.add_argument("--retries", type=int, default=6, help="litellm num_retries per call")
     ap.add_argument("--temperature", type=float)
@@ -238,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
         env["kwargs"] = {"auto_stop_interval_mins": int(hours * 60) + 60, "auto_delete_interval_mins": 30}
 
     cfg = {
-        "job_name": job, "jobs_dir": a.jobs_dir, "n_attempts": 1,
+        "job_name": job, "jobs_dir": a.jobs_dir, "n_attempts": a.attempts,
         "n_concurrent_trials": a.concurrent, "timeout_multiplier": 1.0,
         "environment": env, "agents": [agent], "datasets": [dataset],
     }

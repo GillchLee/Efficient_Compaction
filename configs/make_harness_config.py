@@ -74,6 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="singularity: directory for the converted .sif images (default: $OPTLIMIT_SIF_CACHE at run "
                          "time, else ./data/sif-cache)")
     ap.add_argument("--concurrent", type=int, default=1)
+    ap.add_argument("--attempts", type=int, default=1, help="n_attempts: runs of every task (repeats for a mean)")
     ap.add_argument("--setup-timeout", type=int, metavar="SEC",
                     help="agent setup (CLI install in the container) timeout; default: the harness profile's, else Harbor's 360")
     ap.add_argument("--verifier-feedback", choices=["true", "false", "score"])
@@ -172,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
         env["delete"] = False          # nothing to delete; keeps the .sif cache
     elif harbor != "lhtb-fork" and prof.install_hosts:
         env["extra_allowed_hosts"] = list(prof.install_hosts)   # agent setup runs under the environment baseline
-    cfg = {"job_name": job, "jobs_dir": a.jobs_dir, "n_attempts": 1, "n_concurrent_trials": a.concurrent,
+    cfg = {"job_name": job, "jobs_dir": a.jobs_dir, "n_attempts": a.attempts, "n_concurrent_trials": a.concurrent,
            "timeout_multiplier": 1.0, "environment": env, "agents": [agent], "datasets": [dataset]}
     env_lines = [ln for ln in [continue_env_line(cont or "same_conversation")] if ln]
     if a.verifier_feedback:
