@@ -222,4 +222,5 @@ class OptlimitTerminus2(HandoffPromptsMixin, Terminus2):
             res = await session.environment.exec(command=cmd, timeout_sec=20)
             return res.return_code, res.stdout or ""
         c = self._ol_cfg
-        return await disk_block(self._ol_rr, run, self._ol_dirs, c.carry_files, c.carry_item_tokens)
+        return await disk_block(self._ol_rr, run, self._ol_dirs, c.carry_files, c.carry_item_tokens,
+                                order=c.carry_order)

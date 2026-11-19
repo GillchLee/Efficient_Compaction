@@ -240,3 +240,67 @@ def test_carry_module_matches_tracker_wrapper():
     tr.start_window()
     assert tr.carry_block(4000) == carry.snapshot_block(tr, 4000)
     assert "src/a.rs" in carry.ranked_files(tr)
+
+
+def test_carry_order_reread_edited_puts_files_reread_and_edited_first():
+    """carry_order="reread_edited": a file the last window both re-read and edited outranks a file
+    with a higher re-read score; the default order is unchanged."""
+    from optlimit.carry import ranked_files
+
+    t = RereadTracker()
+    for i, f in enumerate(("a", "b")):
+        t.observe(f"w0-{i}", "exec", 'tools.exec_command({cmd:"cat src/%s.rs"})' % f, f.upper() + "-v0")
+    t.start_window()
+    t.observe("w1-a", "exec", 'tools.exec_command({cmd:"cat src/a.rs"})', "A-v0")        # a: re-read twice
+    t.start_window()
+    t.observe("w2-a", "exec", 'tools.exec_command({cmd:"cat src/a.rs"})', "A-v0")
+    t.observe("w2-b", "exec", 'tools.exec_command({cmd:"cat src/b.rs"})', "B-v0")        # b: re-read once ...
+    t.observe("w2-e", "exec", 'tools.apply_patch("*** Begin Patch\\n*** Update File: src/b.rs\\n@@")', "Done")
+    t.observe("w2-b2", "exec", 'tools.exec_command({cmd:"cat src/b.rs"})', "B-v1")       # ... edited, read again
+    t.start_window()
+    assert t.hot == {"src/b.rs"}
+    assert t.score["src/a.rs"] > t.score["src/b.rs"]
+    assert ranked_files(t) == ["src/a.rs", "src/b.rs"]
+    assert ranked_files(t, "reread_edited") == ["src/b.rs", "src/a.rs"]
+    # with room for one item only, the order decides which file is carried
+    assert "A-v0" in t.carry_block(150, per_item_tokens=150)
+    assert "B-v1" in t.carry_block(150, per_item_tokens=150, order="reread_edited")
+    t.start_window()
+    assert t.hot == set()                              # only the last finished window counts
+    with pytest.raises(ValueError):
+        ranked_files(t, "nope")
+
+
+def test_productive_turn_charge_minimises_cost_per_productive_turn():
+    """reread_productive: the limit is the minimiser of window cost / (K - r), found here by brute force."""
+    from dataclasses import replace as _replace
+
+    base = dict(mode="formula", Lp=1700, L0_mode="fixed", L0_fixed=11500, alpha=10, beta=50, m=1, gamma=1.4,
+                summary_out=1700, g_prior=2000)
+    plain = LimitController(ControllerConfig(**base))
+    prod = LimitController(ControllerConfig(**base, reread_productive=True))
+    assert not plain.cfg.reread_productive                       # off by default
+    d0, d1 = plain.on_prompt("s", "main", 12000.0), prod.on_prompt("s", "main", 12000.0)
+    assert d1.limit > d0.limit                                   # the exact optimum is above the default charge
+    assert 1.05 < d1.limit / d0.limit < 1.12                     # 47.8K -> ~51.6K with the Luna medium prior
+
+    def best(r):
+        s = prod.session("s")
+        p0 = _replace(prod.params(s), summary_fixed=0.0)         # the model without any re-read term
+        def h(L):
+            K = cm.turns_per_window(L, p0)
+            return (cm.f(L, p0) + 50 * 300.0) * K / (K - r) if K > r + 0.5 else float("inf")
+        return min(range(15000, 150000, 50), key=h)
+
+    assert abs(d1.limit - best(3.5)) < 200
+    # r follows the observed re-read calls (prior = one window), the observed cost is ignored
+    for _ in range(3):
+        prod.note_reread("s", 6, 1.0)
+    r = (3.5 + 18) / 4
+    assert abs(prod.limit(prod.session("s"))[0] - best(r)) < 200
+    for _ in range(3):
+        prod.note_reread("s", 0, 9e9)
+    assert abs(prod.limit(prod.session("s"))[0] - best(3.5 / 4)) < 200
+    # needs the Re-read Charge
+    off = LimitController(ControllerConfig(**base, reread_charge=False, reread_productive=True))
+    assert off.on_prompt("s", "main", 12000.0).reread is None

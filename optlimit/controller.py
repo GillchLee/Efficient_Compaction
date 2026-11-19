@@ -107,10 +107,21 @@ class ControllerConfig:
     reread_cost: bool | None = None  # deprecated alias of reread_charge (older configs / spec files)
     reread_turns: float = 3.5
     reread_turn_out: float = 300.0
+    # "Productive-turn Charge" (default off): minimise the cost per productive turn, i.e. per turn that
+    # is not a re-read.  A task needs a number of productive turns; a window of K turns delivers K - r of
+    # them, so the total cost is proportional to W(K) / (K - r), not W(K) / K.  That optimum is the same
+    # as the per-turn optimum with R = r * lambda, lambda = cost of one productive turn at the optimum
+    # (solved by fixed-point iteration).  r = mean of the prior `reread_turns` (one window) and the
+    # re-read calls of the last `learn_recent` windows; the observed cost of those calls is not used.
+    # Needs reread_charge.  Prior codex-luna-medium: L* 47.8K -> 51.6K at r = 3.5, 59.3K at r = 5.
+    reread_productive: bool = False
     # "File Carry-over": token budget of the block of earlier read outputs the proxy / terminus-2
     # adapter puts behind the summary for frequently re-read files (0 = off; optlimit/carry.py)
     carry_files: int = 0
     carry_item_tokens: int = 3000
+    # which files go into the block first: "score" (re-read score) or "reread_edited" (files the last
+    # window both re-read and edited first, then by score)
+    carry_order: str = "score"
     # minimum window from information loss: a compaction costs `reacq_turns` extra turns of
     # re-acquisition (analysis/reacquisition.py); keep that share of turns below reacq_eps,
     # i.e. K >= reacq_turns / reacq_eps, and charge those turns in the per-turn cost
@@ -246,12 +257,38 @@ class LimitController:
         c = self.cfg
         if not c.reread_charge or c.mode in ("off", "fixed"):
             return 0.0
+        if c.reread_productive:
+            n = int(c.learn_recent or 0)
+            tobs = s.rr_turn_obs[-n:] if n > 0 else s.rr_turn_obs
+            r = max((c.reread_turns + sum(tobs)) / (1 + len(tobs)), 0.0)
+            return self.productive_charge(p, r)
         L = best_threshold(p)
         per_turn = (f(L, p) if L is not None and math.isfinite(f(L, p)) else p.L0 + p.Lp) + c.beta * c.reread_turn_out
         prior = c.reread_turns * per_turn
         obs = s.rr_cost_obs[-int(c.learn_recent):] if c.learn_recent and c.learn_recent > 0 else s.rr_cost_obs
         # re-reads per window vary a lot (0 .. 10+), so the prior keeps the weight of one window
         return max((prior + sum(obs)) / (1 + len(obs)), 0.0)
+
+    def productive_charge(self, p: Params, r: float) -> float:
+        """Productive-turn Charge: R = r * (cost per productive turn at the optimum), read units.
+
+        Fixed point of R -> r * (f(L*(R)) + beta * out): with R inside C, f(L*) + beta * out is
+        (W + R) / K = W / (K - r) when R = r * W / (K - r).  Converges at rate ~ r / K."""
+        c = self.cfg
+        if r <= 0:
+            return 0.0
+        R = 0.0
+        for _ in range(60):
+            q = replace(p, summary_fixed=p.summary_fixed + R)
+            L = best_threshold(q)
+            v = f(L, q) if L is not None else math.inf
+            if not math.isfinite(v):
+                v = p.L0 + p.Lp
+            new = r * (v + c.beta * c.reread_turn_out)
+            if abs(new - R) < 1.0:
+                return new
+            R = new
+        return R
 
     def _flush_compaction_obs(self, s: SessionState, prompt: float, cached: float) -> None:
         if prompt - cached > 0:

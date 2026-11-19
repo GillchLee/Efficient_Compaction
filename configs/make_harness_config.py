@@ -52,6 +52,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--no-reread-charge", action="store_true",
                     help="Re-read Charge off: do not add the cost of post-compaction re-reads to C "
                          "(on by default for formula/balance). Same as --set reread_charge=false")
+    ap.add_argument("--productive-turn", action="store_true",
+                    help="Productive-turn Charge: minimise the cost per turn that is not a re-read "
+                         "(R = re-read calls per compaction x cost of a productive turn at the optimum). "
+                         "Same as --set reread_productive=true")
     ap.add_argument("--net-rent", action="store_true",
                     help="balance only, Net rent: leave the prompt growth of re-read calls out of the rent. "
                          "Same as --set rent_net_reread=true")
@@ -59,6 +63,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="File Carry-over: put earlier read output of the files the agent keeps re-reading behind each "
                          "compaction summary, within this token budget (default 8000 when given without a value; "
                          "off when absent). Same as --set carry_files=N")
+    ap.add_argument("--carry-order", choices=["score", "reread_edited"], default=None,
+                    help="File Carry-over: which files go into the block first. score (default): re-read score; "
+                         "reread_edited: files the last window both re-read and edited first. "
+                         "Same as --set carry_order=NAME")
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="extra controller field")
     ap.add_argument("--attach-orphan-summaries", action="store_true",
                     help="proxy: charge compaction calls with a new message root (terminus-2 questions "
@@ -75,6 +83,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "time, else ./data/sif-cache)")
     ap.add_argument("--concurrent", type=int, default=1)
     ap.add_argument("--attempts", type=int, default=1, help="n_attempts: runs of every task (repeats for a mean)")
+    ap.add_argument("--artifact", action="append", default=[], metavar="PATH",
+                    help="container path Harbor copies out after the agent phase, before the verifier "
+                         "(repeatable), e.g. the workspace, so a trial can be graded again later")
+    ap.add_argument("--artifact-exclude", action="append", default=[], metavar="PATTERN",
+                    help="tar --exclude pattern applied to every --artifact directory (repeatable), e.g. target")
     ap.add_argument("--setup-timeout", type=int, metavar="SEC",
                     help="agent setup (CLI install in the container) timeout; default: the harness profile's, else Harbor's 360")
     ap.add_argument("--verifier-feedback", choices=["true", "false", "score"])
@@ -93,10 +106,18 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("--net-rent applies to --balance only")
     if a.no_reread_charge:
         a.set.append("reread_charge=false")
+    if a.productive_turn:
+        if a.no_reread_charge:
+            ap.error("--productive-turn needs the Re-read Charge")
+        a.set.append("reread_productive=true")
     if a.net_rent:
         a.set.append("rent_net_reread=true")
     if a.carry_files:
         a.set.append("carry_files=" + str(int(float(a.carry_files.lower().rstrip("k")) * (1000 if a.carry_files.lower().endswith("k") else 1))))
+    if a.carry_order:
+        if not a.carry_files:
+            ap.error("--carry-order needs --carry-files")
+        a.set.append("carry_order=" + a.carry_order)
     prof = harnesses.get(a.harness)
     priors = json.loads((HERE / "priors.json").read_text())["harness"]
     prices = json.loads((HERE / "prices.json").read_text())["models"]
@@ -175,6 +196,9 @@ def main(argv: list[str] | None = None) -> int:
         env["extra_allowed_hosts"] = list(prof.install_hosts)   # agent setup runs under the environment baseline
     cfg = {"job_name": job, "jobs_dir": a.jobs_dir, "n_attempts": a.attempts, "n_concurrent_trials": a.concurrent,
            "timeout_multiplier": 1.0, "environment": env, "agents": [agent], "datasets": [dataset]}
+    if a.artifact:
+        cfg["artifacts"] = [{"source": src, "exclude": list(a.artifact_exclude)} if a.artifact_exclude else src
+                            for src in a.artifact]
     env_lines = [ln for ln in [continue_env_line(cont or "same_conversation")] if ln]
     if a.verifier_feedback:
         env_lines.append(f"HB_VERIFIER_FEEDBACK={a.verifier_feedback}")

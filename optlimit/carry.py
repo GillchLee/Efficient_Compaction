@@ -25,15 +25,27 @@ DISK_HEADER = ("[Carried over from before the context compaction] Current conten
                "for parts not shown here.")
 
 
-def ranked_files(tracker) -> list[str]:
-    """Scored files, best first."""
-    return sorted(tracker.score, key=lambda f: (-tracker.score[f], f))
+ORDERS = ("score", "reread_edited")
 
 
-def snapshot_candidates(tracker) -> list[tuple[str, object]]:
+def ranked_files(tracker, order: str = "score") -> list[str]:
+    """Scored files, best first.
+
+    order "score" (default): by re-read score.
+    order "reread_edited": files the last window both re-read and edited go first (measured 2026-11-18
+    on SWE-Marathon, Codex + GPT-6 Luna: 60% of them are re-read in the next window, against 46% of
+    the files that were only re-read), then by re-read score.
+    """
+    if order not in ORDERS:
+        raise ValueError(f"carry_order must be one of {ORDERS}, got {order!r}")
+    hot = getattr(tracker, "hot", set()) if order == "reread_edited" else set()
+    return sorted(tracker.score, key=lambda f: (f not in hot, -tracker.score[f], f))
+
+
+def snapshot_candidates(tracker, order: str = "score") -> list[tuple[str, object]]:
     """Scored files whose latest read snapshot is still current (no edit after it), best first."""
     out = []
-    for f in ranked_files(tracker):
+    for f in ranked_files(tracker, order):
         snap = tracker.snaps.get(f)
         if snap is None or tracker.last_edit.get(f, -1) > snap.call_seq:
             continue
@@ -42,14 +54,14 @@ def snapshot_candidates(tracker) -> list[tuple[str, object]]:
 
 
 def snapshot_block(tracker, budget_tokens: int, per_item_tokens: int = 3000,
-                   chars_per_token: float = CHARS_PER_TOKEN) -> str:
+                   chars_per_token: float = CHARS_PER_TOKEN, order: str = "score") -> str:
     """Block of earlier read outputs ('' when nothing qualifies); marks the files as carried."""
     if budget_tokens <= 0:
         return ""
     left = int(budget_tokens * chars_per_token)
     cap = int(per_item_tokens * chars_per_token)
     parts, used, files = [], set(), []
-    for f, snap in snapshot_candidates(tracker):
+    for f, snap in snapshot_candidates(tracker, order):
         if snap.call_seq in used:
             files.append(f)
             continue
@@ -71,13 +83,13 @@ def snapshot_block(tracker, budget_tokens: int, per_item_tokens: int = 3000,
 
 async def disk_block(tracker, run: Callable[[str], Awaitable[tuple[int, str]]], dirs: list[str],
                      budget_tokens: int, per_item_tokens: int = 3000,
-                     chars_per_token: float = CHARS_PER_TOKEN) -> tuple[str, list[str]]:
+                     chars_per_token: float = CHARS_PER_TOKEN, order: str = "score") -> tuple[str, list[str]]:
     """Current contents of the scored files.  `run(cmd)` executes a shell command in the task
     environment and returns (return code, stdout); relative paths are looked up in `dirs` then '.'."""
     left = int(budget_tokens * chars_per_token)
     cap = int(per_item_tokens * chars_per_token)
     parts, files = [], []
-    for path in ranked_files(tracker):
+    for path in ranked_files(tracker, order):
         room = min(cap, left)
         if room < 400:
             break

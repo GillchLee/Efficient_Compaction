@@ -257,7 +257,7 @@ def create_app(cfg: ProxyConfig) -> Starlette:
                             ctl.note_reread(key, turns, cost)
                         meta["reread_window"] = {"window": w, "turns": turns, "cost": round(cost)}
                         cc = cfg.controller
-                        carry[key] = tr.carry_block(cc.carry_files, cc.carry_item_tokens) if cc.carry_files > 0 else ""
+                        carry[key] = tr.carry_block(cc.carry_files, cc.carry_item_tokens, order=cc.carry_order) if cc.carry_files > 0 else ""
                         if carry[key]:
                             meta["carry"] = {"chars": len(carry[key]), "files": sorted(tr.carried)[:40]}
                     if carry.get(key) and dialect.inject_carry(body, carry[key]):

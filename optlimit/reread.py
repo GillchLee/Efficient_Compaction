@@ -96,9 +96,11 @@ class RereadTracker:
     score: dict = field(default_factory=dict)          # canonical path -> re-read score
     snaps: dict = field(default_factory=dict)          # canonical path -> latest read snapshot
     carried: set = field(default_factory=set)          # paths in the carry block of the current window
+    hot: set = field(default_factory=set)              # files the last finished window re-read AND edited
     _canon: dict = field(default_factory=dict)
     _reread_now: set = field(default_factory=set)      # files re-read in the current window
     _touched_now: set = field(default_factory=set)
+    _edited_now: set = field(default_factory=set)      # files edited in the current window
     _seen_ids: set = field(default_factory=set)
     _pending_turn: bool = False                        # a re-read was seen among the calls of the last response
     history: list = field(default_factory=list)        # (window, reread_turns, reread_cost) of finished windows
@@ -140,6 +142,7 @@ class RereadTracker:
         if is_edit:
             for f in files:
                 self.last_edit[f] = self.seq
+                self._edited_now.add(f)
         for f in files:
             self.last_seen[f] = self.window
             self._touched_now.add(f)
@@ -173,17 +176,19 @@ class RereadTracker:
             # nothing can be a re-read before the first compaction: seed with the files edited so far
             for f in self.last_edit:
                 self.score.setdefault(f, 0.5)
+        self.hot = self._reread_now & self._edited_now
         self.window += 1
         self.reread_turns, self.reread_cost = 0, 0.0
-        self._reread_now, self._touched_now, self.carried = set(), set(), set()
+        self._reread_now, self._touched_now, self._edited_now, self.carried = set(), set(), set(), set()
         self._pending_turn = False
         return done
 
     # ------------------------------------------------------------ File Carry-over (optlimit/carry.py)
-    def carry_candidates(self) -> list:
+    def carry_candidates(self, order: str = "score") -> list:
         from .carry import snapshot_candidates
-        return snapshot_candidates(self)
+        return snapshot_candidates(self, order)
 
-    def carry_block(self, budget_tokens: int, per_item_tokens: int = 3000, chars_per_token: float = 3.5) -> str:
+    def carry_block(self, budget_tokens: int, per_item_tokens: int = 3000, chars_per_token: float = 3.5,
+                    order: str = "score") -> str:
         from .carry import snapshot_block
-        return snapshot_block(self, budget_tokens, per_item_tokens, chars_per_token)
+        return snapshot_block(self, budget_tokens, per_item_tokens, chars_per_token, order)
