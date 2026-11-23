@@ -34,6 +34,7 @@ from starlette.routing import Route
 
 from . import dialects as D
 from .carry import CHARS_PER_TOKEN, whole_block
+from .reorient import reorient_block
 from .controller import ControllerConfig, LimitController
 from .envexec import DockerExec
 from .reread import RereadTracker
@@ -137,6 +138,7 @@ def create_app(cfg: ProxyConfig) -> Starlette:
     last_cost: dict[str, float] = {}          # cost of the session's last main call (read units)
     pre_started: dict[str, bool] = {}         # tracker window already advanced for the window that is starting
     carry: dict[str, str] = {}                # carry-over block of the session's current window
+    reorient_text = reorient_block(cfg.controller.reorient)   # instruction behind every summary ("" = off)
     env_run = cfg.env_run or DockerExec().run
     rejects: dict[str, int] = {}
     reject_ts: dict[str, float] = {}
@@ -248,9 +250,12 @@ def create_app(cfg: ProxyConfig) -> Starlette:
                 if tr is None:
                     tr = trackers[key] = RereadTracker()
                 try:
+                    n_new = 0
                     for ev in dialect.tool_events(body):
                         if ev.get("id"):
+                            n_new += ev["id"] not in tr._seen_ids
                             tr.observe(ev["id"], ev.get("name") or "", ev.get("text") or "", ev.get("output"))
+                    meta["new_tool_calls"] = n_new     # calls of the previous response (its width)
                     if tr.close_turn(last_cost.get(key, 0.0)):
                         meta["reread_turn"] = True
                         if kind == "main":
@@ -280,6 +285,10 @@ def create_app(cfg: ProxyConfig) -> Starlette:
                         carry[key] = "\n\n".join(x for x in (whole, snap) if x)
                         if carry[key]:
                             meta["carry"] = {"chars": len(carry[key]), "files": sorted(tr.carried)[:40]}
+                        if reorient_text:
+                            # behind the carried files: the instruction is the last thing before the work resumes
+                            carry[key] = "\n\n".join(x for x in (carry[key], reorient_text) if x)
+                            meta["reorient"] = cc.reorient
                     if carry.get(key) and dialect.inject_carry(body, carry[key]):
                         changed = True
                         meta["carry_injected"] = True

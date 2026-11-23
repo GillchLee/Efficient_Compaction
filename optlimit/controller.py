@@ -132,6 +132,11 @@ class ControllerConfig:
     # `learn_recent` windows (note_carry).
     carry_whole: int = 0
     carry_whole_after: int = 2
+    # "Re-orientation": instruction put behind every compaction summary (optlimit/reorient.py):
+    # "parallel" (fetch everything the summary lacks in one response), "sequential" (control:
+    # check the workspace, no word about batching), "" = off.  Proxy path (Codex); see
+    # docs/parallel_reorientation.md.  Does not change when to compact.
+    reorient: str = ""
     # minimum window from information loss: a compaction costs `reacq_turns` extra turns of
     # re-acquisition (analysis/reacquisition.py); keep that share of turns below reacq_eps,
     # i.e. K >= reacq_turns / reacq_eps, and charge those turns in the per-turn cost

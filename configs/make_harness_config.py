@@ -75,6 +75,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--carry-whole-after", type=int, default=None, metavar="N",
                     help="Whole-file Carry-over: consecutive windows that must re-read a file before it is carried "
                          "whole (default 2). Same as --set carry_whole_after=N")
+    ap.add_argument("--reorient", choices=["parallel", "sequential"], default=None,
+                    help="Re-orientation (proxy harnesses: Codex): put an instruction behind every compaction summary. "
+                         "parallel: fetch everything the summary lacks in ONE response; sequential: control without "
+                         "the batching instruction. docs/parallel_reorientation.md. Same as --set reorient=NAME")
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="extra controller field")
     ap.add_argument("--attach-orphan-summaries", action="store_true",
                     help="proxy: charge compaction calls with a new message root (terminus-2 questions "
@@ -132,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
         if not a.carry_files:
             ap.error("--carry-order needs --carry-files")
         a.set.append("carry_order=" + a.carry_order)
+    if a.reorient:
+        a.set.append("reorient=" + a.reorient)
     prof = harnesses.get(a.harness)
     priors = json.loads((HERE / "priors.json").read_text())["harness"]
     prices = json.loads((HERE / "prices.json").read_text())["models"]

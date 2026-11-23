@@ -114,6 +114,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--carry-whole-after", type=int, default=None, metavar="N",
                     help="Whole-file Carry-over: consecutive windows that must re-read a file before it is carried "
                          "whole (default 2). Same as --set carry_whole_after=N")
+    ap.add_argument("--reorient", choices=["parallel", "sequential"], default=None,
+                    help="Re-orientation (proxy harnesses: Codex): put an instruction behind every compaction summary. "
+                         "parallel: fetch everything the summary lacks in ONE response; sequential: control without "
+                         "the batching instruction. docs/parallel_reorientation.md. Same as --set reorient=NAME")
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                     help="extra optlimit controller field (e.g. lookahead=1, g_prior_weight=3)")
     ap.add_argument("--handoff", action="append", default=[], metavar="KEY=VALUE",
@@ -171,6 +175,8 @@ def main(argv: list[str] | None = None) -> int:
         if not a.carry_files:
             ap.error("--carry-order needs --carry-files")
         a.set.append("carry_order=" + a.carry_order)
+    if a.reorient:
+        a.set.append("reorient=" + a.reorient)
     if a.learn:
         if not (a.formula or a.balance):
             ap.error("--learn applies to --formula / --balance")
