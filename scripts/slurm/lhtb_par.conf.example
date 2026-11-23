@@ -11,9 +11,9 @@ PROXY_HOST=""                   # docker only: address of the node that containe
 # ---- 2. what to run ----------------------------------------------------------------------------
 # arms (one Slurm job each):
 #   fpt        formula + productive-turn charge                 ("그냥 호출": no note)
-#   fpt_par    fpt + parallel re-orientation note after each compaction
-#   fpt_plain  fpt + control note (same position, no batching instruction)
-#   l80k | l80k_par | l80k_plain      fixed 80K limit, same three variants
+#   fpt_par    fpt + parallel re-orientation instruction after each compaction (wording: NOTE)
+#   fpt_seq    fpt + control instruction (same position, no word about batching: --reorient sequential)
+#   l80k | l80k_par | l80k_seq        fixed 80K limit, same three variants
 #   formula | formula_par             formula without the productive-turn charge
 #   native                            Codex's own threshold (~245K), proxy only observes
 ARMS="fpt fpt_par"
@@ -23,6 +23,7 @@ ATTEMPTS=1                      # runs of every task per arm
 CONC=2                          # trials running at once inside one arm's job
 EFFORT=medium                   # Codex reasoning effort (the prior codex-luna-medium was measured at medium)
 AGENT_VERSION=0.171.0           # Codex CLI version, pinned so every arm runs the same one (empty: latest at run time)
+NOTE=parallel                   # wording of the *_par arms: parallel (current) | parallel_v0 (the 2026-11-23 SWE-Marathon runs)
 PREMIUM=0                       # 1: add the re-fetch premium to the formula arms (--reread-premium)
 SUFFIX=""                       # appended to job names (luna_lhtb2_cx_<arm><SUFFIX>), e.g. _r2 for a second round
 

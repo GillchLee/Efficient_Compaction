@@ -4,8 +4,11 @@
 **필요한 정보를 먼저 떠올리고 한 응답에서 도구 호출 여러 개로 한꺼번에 가져오게** 한다. 그리고 그 재파악 단계를
 압축 비용 C 에 포함해 L\* 를 정한다.
 
-상태: 문구와 측정은 이 저장소 밖의 독립 하네스에서 했다(2026-11-19). 이 저장소의 어댑터·컨트롤러에는 아직
-들어가 있지 않다. 2절은 측정 결과, 3절은 optlimit 에 넣을 때의 회계 설계안이다.
+상태: 문구와 측정은 이 저장소 밖의 독립 하네스에서 했다(2026-11-19). 프록시 경로(Codex)에는 문구를 붙이는 옵션이
+들어갔다: `make_config.py --reorient parallel|sequential|parallel_v0` (= `--set reorient=NAME`, `optlimit/reorient.py`). 프록시가
+압축 요약 바로 뒤에 문구를 user 메시지로 넣고(carry 블록이 있으면 그 뒤), 창이 끝날 때까지 같은 자리에 유지한다.
+프록시 로그의 `new_tool_calls` 가 직전 응답의 호출 수(턴의 폭)다. in-process terminus-2 는 hand-off 끝에 같은 문구를 붙인다.
+Claude Code 에는 아직 없다. 3절의 회계 중 (a) 재조회 프리미엄만 옵션으로 들어갔고(5절), 나머지는 설계안이다. 2절은 측정 결과다.
 
 ## 1. 구현
 
@@ -160,7 +163,7 @@ P_s 를 **재파악 단계가 끝난 시점의 prompt** 로 잡는다(Net rent �
 
 | 항목 | 위치 | 내용 |
 |---|---|---|
-| 문구 | `optlimit/reorient.py`, `ControllerConfig.reorient` (`--reorient [parallel\|plain]`) | 1.2절 문구의 일반형. Codex 는 프록시가 압축 항목 바로 뒤에 창의 모든 요청마다 같은 문구를 넣고(싣기 블록과 같은 자리, 싣기가 있으면 그 뒤), in-process terminus-2 는 손 넘김 끝에 붙인다. 고정 한도에서도 동작한다 |
+| 문구 | `optlimit/reorient.py`, `ControllerConfig.reorient` (`--reorient parallel\|sequential\|parallel_v0`) | 1.2절 문구의 일반형. `parallel_v0` 는 2026-11-23 SWE-Marathon 실행(`luna_swem_cx5_*`)이 쓴 첫 문구로, 재현용으로 남겼다. Codex 는 프록시가 압축 항목 바로 뒤에 창의 모든 요청마다 같은 문구를 넣고(싣기 블록과 같은 자리, 싣기가 있으면 그 뒤), in-process terminus-2 는 손 넘김 끝에 붙인다. 고정 한도에서도 동작한다 |
 | 구간 측정 | `RereadTracker.last_phase`, 로그의 `phase_window` | 3.2절의 구간 기준: 창 시작부터 첫 편집 호출 전까지의 모델 호출 수·도구 호출 수·비용, 첫 응답의 호출 수·명령 수·파일 수. 측정만 하고 한도 계산에는 쓰지 않는다 |
 | 재조회 프리미엄 | `ControllerConfig.reread_premium` (`--reread-premium`, `--productive-turn` 과 함께) | 3.1(a)의 `(α−1)·W`: 재읽기 호출이 창에 다시 들여온 토큰 W(최근 `learn_recent` 창 평균)를 C 에 더한 뒤 유효 턴 고정점을 푼다. r 은 지금처럼 경로 기준 재읽기 호출 수 |
 | 넣지 않은 것 | – | 3.1(b) `Lp_eff = Lp + W`, 3.1(c) 조건별 r 사전값, balance 모드의 단계 단위 기준선 |
@@ -169,5 +172,5 @@ P_s 를 **재파악 단계가 끝난 시점의 prompt** 로 잡는다(Net rent �
 (예: kubernetes 66K → 75K). 재읽기가 압축당 2회로 묶이고 W 가 그대로라면 유효 턴만으로는 한도가 39–60K 까지
 내려가고(biofabric 91K → 47K, nextjs 48K → 39K), 프리미엄을 넣으면 46–70K 에 머문다.
 
-실행: `scripts/run_swem_par.sh` (80K 고정 / 유효 턴 formula × 문구 없음 / 병렬 문구, 과제 6개, 3시간 × 2회;
+실행: `scripts/run_swem_par.sh` (80K 고정 / 유효 턴 formula × 문구 없음 / 병렬 문구 `NOTE`, 기본 `parallel_v0`; 과제 6개, 3시간 × 2회;
 머리말에 준수 확인용 1시간 실행 방법).

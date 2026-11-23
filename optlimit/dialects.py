@@ -15,7 +15,7 @@ import json
 import re
 
 from .harnesses import all_summary_markers, all_summary_prefixes, all_window_start_prefixes
-from .reorient import MARK as REORIENT_MARK
+from .reorient import REORIENT_MARKS
 
 # Request classification comes from the harness profiles (optlimit/harnesses.py): a last user
 # message that starts with a summary prefix (or contains a summary marker, e.g. Claude Code 2.1.3xx
@@ -482,7 +482,7 @@ class OpenAIResponses(Dialect):
         if idx is None:
             return False
         nxt = items[idx + 1] if idx + 1 < len(items) else None
-        if self._is_msg(nxt) and _text(nxt.get("content")).startswith((self.CARRY_MARK, REORIENT_MARK)):
+        if self._is_msg(nxt) and _text(nxt.get("content")).startswith((self.CARRY_MARK, *REORIENT_MARKS)):
             return False
         items.insert(idx + 1, {"type": "message", "role": "user",
                                "content": [{"type": "input_text", "text": text}]})

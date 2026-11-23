@@ -59,10 +59,6 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--reread-premium", action="store_true",
                     help="with --productive-turn: add (alpha - 1) x the tokens the re-read calls of a window bring back "
                          "to the compaction cost (Re-fetch premium). Same as --set reread_premium=true")
-    ap.add_argument("--reorient", nargs="?", const="parallel", choices=["parallel", "plain"], default=None,
-                    help="Parallel re-orientation: note behind the compaction summary asking the agent to fetch what "
-                         "it needs in ONE response ('plain' = control wording without that instruction). "
-                         "Codex (proxy) and in-process terminus-2. Same as --set reorient=MODE")
     ap.add_argument("--net-rent", action="store_true",
                     help="balance only, Net rent: leave the prompt growth of re-read calls out of the rent. "
                          "Same as --set rent_net_reread=true")
@@ -82,6 +78,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--carry-whole-after", type=int, default=None, metavar="N",
                     help="Whole-file Carry-over: consecutive windows that must re-read a file before it is carried "
                          "whole (default 2). Same as --set carry_whole_after=N")
+    ap.add_argument("--reorient", choices=["parallel", "sequential", "parallel_v0"], default=None,
+                    help="Re-orientation (Codex proxy, in-process terminus-2): put an instruction behind every compaction "
+                         "summary. parallel: fetch everything the summary lacks in ONE response; sequential: control "
+                         "without the batching instruction; parallel_v0: first wording of parallel (2026-11-23 "
+                         "SWE-Marathon runs). docs/parallel_reorientation.md. Same as --set reorient=NAME")
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="extra controller field")
     ap.add_argument("--attach-orphan-summaries", action="store_true",
                     help="proxy: charge compaction calls with a new message root (terminus-2 questions "
@@ -132,8 +133,6 @@ def main(argv: list[str] | None = None) -> int:
         if not a.productive_turn:
             ap.error("--reread-premium needs --productive-turn")
         a.set.append("reread_premium=true")
-    if a.reorient:
-        a.set.append("reorient=" + a.reorient)
     if a.net_rent:
         a.set.append("rent_net_reread=true")
     if a.carry_files:
@@ -148,6 +147,8 @@ def main(argv: list[str] | None = None) -> int:
         if not a.carry_files:
             ap.error("--carry-order needs --carry-files")
         a.set.append("carry_order=" + a.carry_order)
+    if a.reorient:
+        a.set.append("reorient=" + a.reorient)
     prof = harnesses.get(a.harness)
     priors = json.loads((HERE / "priors.json").read_text())["harness"]
     prices = json.loads((HERE / "prices.json").read_text())["models"]

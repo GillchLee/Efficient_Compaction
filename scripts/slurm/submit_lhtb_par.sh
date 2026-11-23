@@ -13,12 +13,12 @@ cd "$(dirname "$0")/../.."
 CONF=${CONF:-scripts/slurm/lhtb_par.conf}
 [[ -f $CONF ]] || { echo "missing $CONF: cp scripts/slurm/lhtb_par.conf.example $CONF and edit it" >&2; exit 1; }
 # values already in the environment win over the conf file
-OVERRIDES=$(for v in ENV_TYPE ARMS TASKS HOURS ATTEMPTS CONC EFFORT AGENT_VERSION PREMIUM SUFFIX PARTITION ACCOUNT QOS TIME CPUS_PER_TRIAL MEM_PER_TRIAL_GB EXTRA_SBATCH SIF_CACHE; do
+OVERRIDES=$(for v in ENV_TYPE ARMS TASKS HOURS ATTEMPTS CONC EFFORT AGENT_VERSION PREMIUM NOTE SUFFIX PARTITION ACCOUNT QOS TIME CPUS_PER_TRIAL MEM_PER_TRIAL_GB EXTRA_SBATCH SIF_CACHE; do
   if [[ -n "${!v+x}" ]]; then printf '%s=%q\n' "$v" "${!v}"; fi; done)
 # shellcheck disable=SC1090
 source "$CONF"
 eval "$OVERRIDES"
-ENV_TYPE=${ENV_TYPE:-singularity}; HOURS=${HOURS:-3}; ATTEMPTS=${ATTEMPTS:-1}; CONC=${CONC:-2}
+ENV_TYPE=${ENV_TYPE:-singularity}; HOURS=${HOURS:-3}; ATTEMPTS=${ATTEMPTS:-1}; CONC=${CONC:-2}; NOTE=${NOTE:-parallel}
 PY=.venv/bin/python
 [[ -x $PY ]] || { echo "missing .venv: bash scripts/slurm/setup_server.sh" >&2; exit 1; }
 
@@ -47,13 +47,13 @@ PT=(--productive-turn); [[ ${PREMIUM:-0} == 1 ]] && PT+=(--reread-premium)
 arm_flags() {
   case "$1" in
     fpt)         echo "${FORMULA[*]} ${PT[*]}" ;;
-    fpt_par)     echo "${FORMULA[*]} ${PT[*]} --reorient parallel" ;;
-    fpt_plain)   echo "${FORMULA[*]} ${PT[*]} --reorient plain" ;;
+    fpt_par)     echo "${FORMULA[*]} ${PT[*]} --reorient $NOTE" ;;
+    fpt_seq)     echo "${FORMULA[*]} ${PT[*]} --reorient sequential" ;;
     formula)     echo "${FORMULA[*]}" ;;
-    formula_par) echo "${FORMULA[*]} --reorient parallel" ;;
+    formula_par) echo "${FORMULA[*]} --reorient $NOTE" ;;
     l80k)        echo "--proxy-fixed 80k" ;;
-    l80k_par)    echo "--proxy-fixed 80k --reorient parallel" ;;
-    l80k_plain)  echo "--proxy-fixed 80k --reorient plain" ;;
+    l80k_par)    echo "--proxy-fixed 80k --reorient $NOTE" ;;
+    l80k_seq)    echo "--proxy-fixed 80k --reorient sequential" ;;
     native)      echo "--limit native --observe" ;;
     *) echo "unknown arm: $1" >&2; return 1 ;;
   esac

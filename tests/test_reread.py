@@ -456,16 +456,18 @@ async def test_proxy_carries_a_file_whole_after_two_consecutive_reread_windows(t
     assert "A-part" in seen[3]["input"][2]["content"][0]["text"]            # window 2: still the snapshot of the read
 
 
-# ---------------------------------------------------------------- Parallel re-orientation
-def test_reorient_text_modes():
-    from optlimit.reorient import MARK, reorient_text
+# ---------------------------------------------------------------- Re-orientation (tests/test_reorient.py has the modes)
+def test_reorient_v0_wording_and_config_validation():
+    from optlimit.dialects import OpenAIResponses
+    from optlimit.reorient import PARALLEL, REORIENT_MARKS, V0_MARK, reorient_block
 
-    assert reorient_text("off") == "" and reorient_text(None) == ""
-    par, plain = reorient_text("parallel"), reorient_text("plain")
-    assert par.startswith(MARK) and plain.startswith(MARK) and par != plain
-    assert "ONE step" in par and "ONE" not in plain          # only the parallel wording says how to fetch
-    with pytest.raises(ValueError):
-        reorient_text("everything")
+    v0 = reorient_block("parallel_v0")                        # wording of the 2026-11-23 SWE-Marathon runs
+    assert v0.startswith(V0_MARK) and "ONE step" in v0 and v0 != PARALLEL
+    assert all(reorient_block(m).startswith(REORIENT_MARKS) for m in ("parallel", "sequential", "parallel_v0"))
+    d = OpenAIResponses()                                     # the "already inserted" check knows the v0 mark too
+    body = {"input": [{"type": "message", "role": "user", "content": "task"},
+                      {"type": "compaction", "id": "cmp_1", "encrypted_content": "x"}]}
+    assert d.inject_carry(body, v0) and not d.inject_carry(body, v0) and len(body["input"]) == 3
     with pytest.raises(ValueError):                           # a typo in a config fails at start-up
         ControllerConfig(reorient="paralel")
 
@@ -493,10 +495,10 @@ def test_tracker_measures_the_reorientation_phase():
 def test_proxy_injects_the_reorientation_note(tmp_path):
     """reorient=parallel: the note sits behind the compaction item on every request of the window, once."""
     from optlimit.dialects import OpenAIResponses as ResponsesDialect
-    from optlimit.reorient import MARK, reorient_text
+    from optlimit.reorient import REORIENT_MARK as MARK, reorient_block
 
     d = ResponsesDialect()
-    note = reorient_text("parallel")
+    note = reorient_block("parallel")
     body = {"input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "task"}]},
                       {"type": "compaction", "encrypted_content": "x"},
                       {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "go on"}]}]}
@@ -561,7 +563,7 @@ def test_controller_records_refetched_tokens_per_window():
 @pytest.mark.asyncio
 async def test_proxy_adds_the_reorientation_note_in_fixed_mode_too(tmp_path):
     """Through the proxy: no carry-over, fixed limit; the note is in every request of a window after a compaction."""
-    from optlimit.reorient import MARK
+    from optlimit.reorient import REORIENT_MARK as MARK
     seen = []
 
     async def upstream(request):

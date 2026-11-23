@@ -50,8 +50,8 @@ Re-reads after a compaction (optlimit/reread.py detects them) feed three separat
 * Whole-file Carry-over (`carry_whole` > 0, default off; optlimit/carry.py): a file re-read in
   `carry_whole_after` consecutive windows is handed over complete, read from disk at the compaction.
   The carried size enters Lp directly (note_carry).
-* Parallel re-orientation (`reorient`, default off; optlimit/reorient.py): a note behind the summary asks
-  the agent to fetch what it needs in one response.  With it re-reads take fewer calls but bring the same
+* Re-orientation (`reorient`, default off; optlimit/reorient.py): an instruction behind the summary asks
+  the agent to fetch what it needs in one response ("parallel"; "sequential" = control).  With it re-reads take fewer calls but bring the same
   tokens; `reread_premium` (with `reread_productive`) adds (alpha - 1) x those tokens to C.
 * Net rent (`rent_net_reread`, balance mode, default off): the prompt growth of re-read
   calls is left out of the rent.  Re-read Charge already counts those calls inside C, and
@@ -128,9 +128,6 @@ class ControllerConfig:
     # one).  Matters when re-reads are batched into one or two calls (optlimit/reorient.py): r falls
     # but W stays, and r alone would then understate the compaction.  docs/parallel_reorientation.md 3.1(a).
     reread_premium: bool = False
-    # "Parallel re-orientation" (optlimit/reorient.py): note behind the compaction summary.
-    # "parallel" = fetch everything needed in one response, "plain" = control wording, "off" = none.
-    reorient: str = "off"
     # "File Carry-over": token budget of the block of earlier read outputs the proxy / terminus-2
     # adapter puts behind the summary for frequently re-read files (0 = off; optlimit/carry.py)
     carry_files: int = 0
@@ -145,6 +142,12 @@ class ControllerConfig:
     # `learn_recent` windows (note_carry).
     carry_whole: int = 0
     carry_whole_after: int = 2
+    # "Re-orientation": instruction put behind every compaction summary (optlimit/reorient.py):
+    # "parallel" (fetch everything the summary lacks in one response), "sequential" (control:
+    # check the workspace, no word about batching), "parallel_v0" (first wording of parallel, the
+    # 2026-11-23 SWE-Marathon runs), "" = off.  Proxy path (Codex) and in-process terminus-2; see
+    # docs/parallel_reorientation.md.  Does not change when to compact.
+    reorient: str = ""
     # minimum window from information loss: a compaction costs `reacq_turns` extra turns of
     # re-acquisition (analysis/reacquisition.py); keep that share of turns below reacq_eps,
     # i.e. K >= reacq_turns / reacq_eps, and charge those turns in the per-turn cost
@@ -168,8 +171,8 @@ class ControllerConfig:
     rent_net_reread: bool = False
 
     def __post_init__(self) -> None:
-        from .reorient import reorient_text
-        reorient_text(self.reorient)              # unknown mode raises here, not at the first compaction
+        from .reorient import reorient_block
+        reorient_block(self.reorient)             # unknown mode raises here, not at the first compaction
         if self.reread_cost is not None:          # old spelling wins only when given explicitly
             self.reread_charge = bool(self.reread_cost)
             self.reread_cost = None

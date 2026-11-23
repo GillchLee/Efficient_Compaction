@@ -5,10 +5,13 @@
 # note behind the compaction summary {none, parallel re-orientation}.
 #
 #   l80k        fixed 80K, no note                      (control; same settings as luna_swem_cx3_l80k)
-#   l80k_par    fixed 80K + --reorient parallel         (effect of the note alone: the limit cannot move)
+#   l80k_par    fixed 80K + --reorient $NOTE            (effect of the note alone: the limit cannot move)
 #   fpt         formula + --productive-turn [+ --reread-premium], no note   (control)
-#   fpt_par     the same + --reorient parallel          (the method under test)
-#   l80k_plain / fpt_plain   --reorient plain (control wording: "re-orient", nothing about how to fetch)
+#   fpt_par     the same + --reorient $NOTE             (the method under test)
+#   l80k_seq / fpt_seq   --reorient sequential (control wording: check the workspace, nothing about batching)
+#
+# NOTE (default parallel_v0) is the wording of the *_par arms: the luna_swem_cx5_* runs of 2026-11-23
+# used parallel_v0; NOTE=parallel selects the current wording (optlimit/reorient.py).
 #
 # The controls run again, side by side with the treated arms (same code, same days); the earlier
 # luna_swem_cx3_{l80k,formula_pt} runs stay as a second reference.  Each arm is one job with its own
@@ -70,11 +73,11 @@ for arm in $ARMS; do
   job=luna_swem_cx5_${arm}${SUFFIX}
   case $arm in
     l80k)        gen "$job" "${FIXED[@]}" || exit 1 ;;
-    l80k_par)    gen "$job" "${FIXED[@]}" --reorient parallel || exit 1 ;;
-    l80k_plain)  gen "$job" "${FIXED[@]}" --reorient plain || exit 1 ;;
+    l80k_par)    gen "$job" "${FIXED[@]}" --reorient "${NOTE:-parallel_v0}" || exit 1 ;;
+    l80k_seq)    gen "$job" "${FIXED[@]}" --reorient sequential || exit 1 ;;
     fpt)         gen "$job" "${FORMULA[@]}" || exit 1 ;;
-    fpt_par)     gen "$job" "${FORMULA[@]}" --reorient parallel || exit 1 ;;
-    fpt_plain)   gen "$job" "${FORMULA[@]}" --reorient plain || exit 1 ;;
+    fpt_par)     gen "$job" "${FORMULA[@]}" --reorient "${NOTE:-parallel_v0}" || exit 1 ;;
+    fpt_seq)     gen "$job" "${FORMULA[@]}" --reorient sequential || exit 1 ;;
     *) echo "unknown arm: $arm" >&2; exit 1 ;;
   esac
 done
