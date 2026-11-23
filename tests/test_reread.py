@@ -454,3 +454,144 @@ async def test_proxy_carries_a_file_whole_after_two_consecutive_reread_windows(t
     s = app.state.controller.session("cx:T")
     assert s.carry_now == pytest.approx(len(blocks[0]) / 3.5)
     assert "A-part" in seen[3]["input"][2]["content"][0]["text"]            # window 2: still the snapshot of the read
+
+
+# ---------------------------------------------------------------- Parallel re-orientation
+def test_reorient_text_modes():
+    from optlimit.reorient import MARK, reorient_text
+
+    assert reorient_text("off") == "" and reorient_text(None) == ""
+    par, plain = reorient_text("parallel"), reorient_text("plain")
+    assert par.startswith(MARK) and plain.startswith(MARK) and par != plain
+    assert "ONE step" in par and "ONE" not in plain          # only the parallel wording says how to fetch
+    with pytest.raises(ValueError):
+        reorient_text("everything")
+    with pytest.raises(ValueError):                           # a typo in a config fails at start-up
+        ControllerConfig(reorient="paralel")
+
+
+def test_tracker_measures_the_reorientation_phase():
+    """Phase = model calls of a window before the first call that edits a file."""
+    t = RereadTracker()
+    t.observe("a", "exec", 'const r = await tools.exec_command({cmd:"cat src/a.rs"})'); t.close_turn(5)
+    t.start_window()
+    assert t.last_phase["turns"] == 1 and not t.last_phase["ended_by_edit"]
+    # window 1: one call running three commands, a second read, then an edit, then another read
+    t.observe("b", "exec", 'await tools.exec_command({cmd:"cat src/a.rs"}); await tools.exec_command({cmd:"cat src/b.rs"}); '
+                          'await tools.exec_command({cmd:"cargo test"})'); t.close_turn(100)
+    t.observe("c", "exec", 'await tools.exec_command({cmd:"sed -n 1,20p src/c.rs"})'); t.close_turn(40)
+    t.observe("d", "exec", 'const patch = "*** Begin Patch\\n*** Update File: src/a.rs\\n"'); t.close_turn(30)
+    t.observe("e", "exec", 'await tools.exec_command({cmd:"cat src/a.rs"})'); t.close_turn(20)
+    t.close_turn(9)                                           # a model call without tool calls is not a phase turn
+    w, turns, cost = t.start_window()
+    assert (w, turns) == (1, 1)                               # the path-based count is unchanged by the phase fields
+    assert t.last_phase == {"turns": 2, "calls": 2, "cost": 140, "ended_by_edit": True,
+                            "first_calls": 1, "first_cmds": 3, "first_files": 2}
+    assert t.phase_open and t.phase_turns == 0                # reset for the next window
+
+
+def test_proxy_injects_the_reorientation_note(tmp_path):
+    """reorient=parallel: the note sits behind the compaction item on every request of the window, once."""
+    from optlimit.dialects import OpenAIResponses as ResponsesDialect
+    from optlimit.reorient import MARK, reorient_text
+
+    d = ResponsesDialect()
+    note = reorient_text("parallel")
+    body = {"input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "task"}]},
+                      {"type": "compaction", "encrypted_content": "x"},
+                      {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "go on"}]}]}
+    assert d.inject_carry(body, note)
+    assert body["input"][2]["content"][0]["text"].startswith(MARK) and len(body["input"]) == 4
+    assert not d.inject_carry(body, note) and len(body["input"]) == 4      # already there: not doubled
+    # behind a carry block the note comes last (it refers to what is above)
+    both = "\n\n".join(("[Carried over from before the context compaction] files ...", note))
+    body2 = {"input": [{"type": "compaction", "encrypted_content": "x"}]}
+    assert d.inject_carry(body2, both) and body2["input"][1]["content"][0]["text"].endswith("Then continue the work.")
+    assert not d.inject_carry({"input": [{"type": "message", "role": "user", "content": "no compaction yet"}]}, note)
+
+
+def test_refetch_premium_adds_the_rewrite_cost_of_refetched_tokens():
+    """reread_premium: C grows by (alpha - 1) x W; the limit is the minimiser of (window cost + E) / (K - r)."""
+    from dataclasses import replace as _replace
+
+    base = dict(mode="formula", Lp=1700, L0_mode="fixed", L0_fixed=11500, alpha=10, beta=50, m=1, gamma=1.4,
+                summary_out=1700, g_prior=2000, reread_productive=True)
+    prod = LimitController(ControllerConfig(**base))
+    prem = LimitController(ControllerConfig(**base, reread_premium=True))
+    assert not prod.cfg.reread_premium                                    # off by default
+    for c in (prod, prem):
+        c.on_prompt("s", "main", 12000.0)
+    assert prem.limit(prem.session("s"))[0] == prod.limit(prod.session("s"))[0]   # nothing observed yet: no premium
+    # three windows whose re-read calls brought back 15K tokens each, in 2 calls (batched re-reads)
+    for c in (prod, prem):
+        s = c.session("s")
+        s.rr_w_obs += [15000.0] * 3
+        for _ in range(3):
+            c.note_reread("s", 2, 1.0)
+    s = prem.session("s")
+    assert prem.refetch_premium(s) == 9 * 15000 and prod.refetch_premium(prod.session("s")) == 0
+    r = (3.5 + 6) / 4
+
+    def best(E):
+        p0 = _replace(prem.params(s), summary_fixed=0.0)
+        def h(L):
+            K = cm.turns_per_window(L, p0)
+            return (cm.f(L, p0) * K + E + 50 * 300.0 * K) / (K - r) if K > r + 0.5 else float("inf")
+        return min(range(15000, 150000, 50), key=h)
+
+    assert abs(prod.limit(prod.session("s"))[0] - best(0)) < 200
+    assert abs(prem.limit(s)[0] - best(9 * 15000)) < 200
+    assert prem.limit(s)[0] > prod.limit(prod.session("s"))[0] + 2000     # the premium keeps the limit up
+
+
+def test_controller_records_refetched_tokens_per_window():
+    c = LimitController(ControllerConfig(mode="formula", Lp=1700, L0_mode="fixed", L0_fixed=11500, alpha=10, beta=50,
+                                         g_prior=2000, reread_productive=True, reread_premium=True))
+    c.on_prompt("s", "main", 12000.0); c.on_prompt("s", "main", 30000.0)
+    c.on_prompt("s", "main", 13000.0, window_start_hint=True)             # window 1 starts: window 0 is not recorded
+    assert c.session("s").rr_w_obs == []
+    c.note_reread_growth("s"); c.on_prompt("s", "main", 21000.0)          # +8K comes from a re-read call
+    c.on_prompt("s", "main", 23000.0)                                     # ordinary growth
+    c.note_reread_growth("s"); c.on_prompt("s", "main", 27000.0)          # +4K from a re-read call
+    c.on_prompt("s", "main", 13500.0, window_start_hint=True)
+    assert c.session("s").rr_w_obs == [12000.0]
+    assert c.refetch_premium(c.session("s")) == 9 * 12000
+
+
+@pytest.mark.asyncio
+async def test_proxy_adds_the_reorientation_note_in_fixed_mode_too(tmp_path):
+    """Through the proxy: no carry-over, fixed limit; the note is in every request of a window after a compaction."""
+    from optlimit.reorient import MARK
+    seen = []
+
+    async def upstream(request):
+        body = json.loads(await request.body())
+        seen.append(body)
+        n = sum(len(json.dumps(x)) for x in body["input"])
+        return JSONResponse({"id": "r", "object": "response", "output": [],
+                             "usage": {"input_tokens": 12000 + n, "input_tokens_details": {"cached_tokens": 12000},
+                                       "output_tokens": 100, "total_tokens": 12100 + n}})
+
+    cfg = ProxyConfig(trigger="off", log_path=str(tmp_path / "log.jsonl"),
+                      controller=ControllerConfig(mode="fixed", fixed_limit=80000, reorient="parallel"),
+                      transport=httpx.ASGITransport(app=Starlette(routes=[Route("/v1/responses", upstream, methods=["POST"])])))
+    app = create_app(cfg)
+    task = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "port the service"}]}
+    h1, h2 = ({"x-client-request-id": "T", "x-codex-window-id": f"T:{i}"} for i in range(2))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://p") as c:
+        w0 = [task] + _exec("a", "cat src/a.rs", "A-contents")
+        await c.post("/v1/responses", json={"model": "m", "input": w0}, headers=h1)
+        await c.post("/v1/responses", json={"model": "m", "input": w0 + [{"type": "compaction_trigger"}]}, headers=h1)
+        cmp1 = {"type": "compaction", "id": "cmp_1", "encrypted_content": "x"}
+        await c.post("/v1/responses", json={"model": "m", "input": [task, cmp1]}, headers=h2)      # window 1 starts
+        w1 = [task, cmp1] + _exec("b", "cat src/a.rs; cat src/b.rs", "A B")
+        await c.post("/v1/responses", json={"model": "m", "input": w1}, headers=h2)
+    assert not any(MARK in json.dumps(b) for b in seen[:2])        # nothing before the first compaction
+    for body in seen[2:]:
+        assert body["input"][1]["type"] == "compaction"
+        assert body["input"][2]["content"][0]["text"].startswith(MARK)
+        assert sum(MARK in json.dumps(x) for x in body["input"]) == 1
+    assert seen[2]["input"][2] == seen[3]["input"][2]
+    recs = [json.loads(l) for l in open(tmp_path / "log.jsonl")]
+    assert recs[2]["reorient"] == "parallel" and recs[2]["carry_injected"] is True
+    assert "phase_window" not in recs[2]                             # window 0 is not a re-orientation phase

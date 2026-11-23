@@ -34,6 +34,7 @@ from starlette.routing import Route
 
 from . import dialects as D
 from .carry import CHARS_PER_TOKEN, whole_block
+from .reorient import reorient_text
 from .controller import ControllerConfig, LimitController
 from .envexec import DockerExec
 from .reread import RereadTracker
@@ -262,6 +263,8 @@ def create_app(cfg: ProxyConfig) -> Starlette:
                         if w >= 1:
                             ctl.note_reread(key, turns, cost)
                         meta["reread_window"] = {"window": w, "turns": turns, "cost": round(cost)}
+                        if w >= 1:
+                            meta["phase_window"] = dict(tr.last_phase)
                         cc = cfg.controller
                         whole = ""
                         if cc.carry_whole > 0 and w >= 1:
@@ -280,6 +283,11 @@ def create_app(cfg: ProxyConfig) -> Starlette:
                         carry[key] = "\n\n".join(x for x in (whole, snap) if x)
                         if carry[key]:
                             meta["carry"] = {"chars": len(carry[key]), "files": sorted(tr.carried)[:40]}
+                        note = reorient_text(cc.reorient)
+                        if note:
+                            # parallel re-orientation: the note rides behind the summary like the carry block
+                            carry[key] = "\n\n".join(x for x in (carry[key], note) if x)
+                            meta["reorient"] = cc.reorient
                     if carry.get(key) and dialect.inject_carry(body, carry[key]):
                         changed = True
                         meta["carry_injected"] = True

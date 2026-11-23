@@ -80,6 +80,7 @@ from harbor.agents.terminus_2.terminus_2 import Terminus2
 from ..controller import LimitController, config_from_spec, load_prices
 from ..dialects import _keystrokes
 from ..carry import CHARS_PER_TOKEN, disk_block, whole_block
+from ..reorient import reorient_text
 from ..reread import RereadTracker
 
 import re
@@ -218,6 +219,8 @@ class OptlimitTerminus2(HandoffPromptsMixin, Terminus2):
             if w >= 1:
                 self._ctl.note_reread(self._ol_key, turns, cost)
             rec["reread_window"] = {"window": w, "turns": turns, "cost": round(cost)}
+            if w >= 1:
+                rec["phase_window"] = dict(self._ol_rr.last_phase)
             c = self._ol_cfg
             whole = block = ""
             if c.carry_whole > 0 and w >= 1:
@@ -239,7 +242,10 @@ class OptlimitTerminus2(HandoffPromptsMixin, Terminus2):
                 except Exception as e:
                     self.logger.warning(f"optlimit: carry-over failed: {e}")
                     block = ""
-            extra = "\n\n".join(x for x in (whole, block) if x)
+            note = reorient_text(c.reorient)      # parallel re-orientation: last, it refers to what is above
+            if note:
+                rec["reorient"] = c.reorient
+            extra = "\n\n".join(x for x in (whole, block, note) if x)
             if extra:
                 result = (result[0] + "\n\n" + extra, result[1])
         self._ol_log(rec)

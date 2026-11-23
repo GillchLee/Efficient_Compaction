@@ -32,6 +32,7 @@ PATCH_FILE = re.compile(r"\*\*\* (?:Update|Add|Delete) File:\s*([\w./@+-]+)")
 PATH = re.compile(r"[\w./@+-]*[\w@+-]\.(?:rs|py|pyi|ts|tsx|js|jsx|mjs|cjs|rb|toml|json|md|go|c|h|cc|cpp|hpp|java|kt|scala|"
                   r"yaml|yml|txt|sh|css|scss|html|csv|tsv|cfg|ini|sql|xml|tex|lean|v|ml|mli|R|ipynb|log|conf|lock|proto|"
                   r"swift|php|lua|pl|ex|exs|hs|zig|vue|svelte|gradle|cmake|mk)\b|[\w./-]*(?:Makefile|Dockerfile)\b")
+EXEC_CALL = re.compile(r"exec_command\s*\(")          # Codex exec script: one tool call can run several commands
 READ_TOOLS = {"read", "grep", "glob", "view", "ls", "read_file", "list_dir", "search"}
 EDIT_TOOLS = {"edit", "write", "multiedit", "notebookedit", "apply_patch", "str_replace_editor", "str_replace_based_edit_tool",
               "write_file", "create_file"}
@@ -109,6 +110,20 @@ class RereadTracker:
     _seen_ids: set = field(default_factory=set)
     _pending_turn: bool = False                        # a re-read was seen among the calls of the last response
     history: list = field(default_factory=list)        # (window, reread_turns, reread_cost) of finished windows
+    # re-orientation phase of the current window: model calls from the window start up to (not including)
+    # the first call that edits a file.  Measurement only (docs/parallel_reorientation.md 3.2).
+    phase_open: bool = True
+    phase_turns: int = 0
+    phase_calls: int = 0
+    phase_cost: float = 0.0
+    first_calls: int = 0                               # tool calls / commands / files of the window's first model call
+    first_cmds: int = 0
+    first_files: int = 0
+    last_phase: dict = field(default_factory=dict)     # the finished window's phase (set by start_window)
+    _turn_calls: int = 0
+    _turn_cmds: int = 0
+    _turn_files: set = field(default_factory=set)
+    _turns_now: int = 0
 
     # ------------------------------------------------------------ paths
     def canon(self, p: str) -> str:
@@ -135,6 +150,12 @@ class RereadTracker:
             self.workdirs[d] = self.workdirs.get(d, 0) + 1
         is_read, is_edit, paths = classify_call(name, text)
         files = [self.canon(p) for p in paths]
+        if is_edit:
+            self.phase_open = False
+        self._turn_calls += 1
+        self._turn_cmds += max(len(EXEC_CALL.findall(text or "")), 1)
+        if is_read:
+            self._turn_files.update(files)
         reread = False
         if is_read:
             for f in files:
@@ -160,6 +181,15 @@ class RereadTracker:
     def close_turn(self, cost: float = 0.0) -> bool:
         """Call once per model call after feeding the tool calls it issued; `cost` is that call's cost."""
         hit, self._pending_turn = self._pending_turn, False
+        if self._turn_calls:
+            self._turns_now += 1
+            if self._turns_now == 1:
+                self.first_calls, self.first_cmds, self.first_files = self._turn_calls, self._turn_cmds, len(self._turn_files)
+            if self.phase_open:
+                self.phase_turns += 1
+                self.phase_calls += self._turn_calls
+                self.phase_cost += float(cost)
+        self._turn_calls, self._turn_cmds, self._turn_files = 0, 0, set()
         if hit:
             self.reread_turns += 1
             self.reread_cost += float(cost)
@@ -169,6 +199,12 @@ class RereadTracker:
         """A compaction happened. Returns (finished window index, its re-read turns, their cost)."""
         done = (self.window, self.reread_turns, self.reread_cost)
         self.history.append(done)
+        self.last_phase = {"turns": self.phase_turns, "calls": self.phase_calls, "cost": round(self.phase_cost),
+                           "ended_by_edit": not self.phase_open, "first_calls": self.first_calls,
+                           "first_cmds": self.first_cmds, "first_files": self.first_files}
+        self.phase_open, self.phase_turns, self.phase_calls, self.phase_cost = True, 0, 0, 0.0
+        self.first_calls = self.first_cmds = self.first_files = 0
+        self._turn_calls, self._turn_cmds, self._turn_files, self._turns_now = 0, 0, set(), 0
         for f in set(self.score) | self._reread_now:
             s = self.score.get(f, 0.0) * self.decay
             if f in self._reread_now:

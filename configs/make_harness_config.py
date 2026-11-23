@@ -56,6 +56,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Productive-turn Charge: minimise the cost per turn that is not a re-read "
                          "(R = re-read calls per compaction x cost of a productive turn at the optimum). "
                          "Same as --set reread_productive=true")
+    ap.add_argument("--reread-premium", action="store_true",
+                    help="with --productive-turn: add (alpha - 1) x the tokens the re-read calls of a window bring back "
+                         "to the compaction cost (Re-fetch premium). Same as --set reread_premium=true")
+    ap.add_argument("--reorient", nargs="?", const="parallel", choices=["parallel", "plain"], default=None,
+                    help="Parallel re-orientation: note behind the compaction summary asking the agent to fetch what "
+                         "it needs in ONE response ('plain' = control wording without that instruction). "
+                         "Codex (proxy) and in-process terminus-2. Same as --set reorient=MODE")
     ap.add_argument("--net-rent", action="store_true",
                     help="balance only, Net rent: leave the prompt growth of re-read calls out of the rent. "
                          "Same as --set rent_net_reread=true")
@@ -99,6 +106,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--setup-timeout", type=int, metavar="SEC",
                     help="agent setup (CLI install in the container) timeout; default: the harness profile's, else Harbor's 360")
     ap.add_argument("--verifier-feedback", choices=["true", "false", "score"])
+    ap.add_argument("--agent-version", metavar="X.Y.Z",
+                    help="installed-agent CLI version to install in the task container (agent kwarg version; "
+                         "default: the newest release at run time). Pin it to compare with an earlier run")
     ap.add_argument("--reasoning-effort", choices=["none", "minimal", "low", "medium", "high", "xhigh", "max"],
                     help="agent kwarg reasoning_effort (Codex: -c model_reasoning_effort); default: the CLI's own")
     ap.add_argument("--job-name")
@@ -118,6 +128,12 @@ def main(argv: list[str] | None = None) -> int:
         if a.no_reread_charge:
             ap.error("--productive-turn needs the Re-read Charge")
         a.set.append("reread_productive=true")
+    if a.reread_premium:
+        if not a.productive_turn:
+            ap.error("--reread-premium needs --productive-turn")
+        a.set.append("reread_premium=true")
+    if a.reorient:
+        a.set.append("reorient=" + a.reorient)
     if a.net_rent:
         a.set.append("rent_net_reread=true")
     if a.carry_files:
@@ -184,6 +200,8 @@ def main(argv: list[str] | None = None) -> int:
     kwargs = {**kwargs, **(harness_kwargs.get(a.harness) or {})}
     if a.reasoning_effort:
         kwargs["reasoning_effort"] = a.reasoning_effort
+    if getattr(a, "agent_version", None):
+        kwargs["version"] = a.agent_version
     job = a.job_name or f"{a.harness}-{short_model(a.model)}_{cond}"
     out = Path(a.out) if a.out else HERE / "sweep" / f"{job}.yaml"
     agent = {**prof.agent, "model_name": a.model, "override_timeout_sec": int(hours * 3600), "kwargs": kwargs}

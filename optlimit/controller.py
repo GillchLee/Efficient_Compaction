@@ -50,6 +50,9 @@ Re-reads after a compaction (optlimit/reread.py detects them) feed three separat
 * Whole-file Carry-over (`carry_whole` > 0, default off; optlimit/carry.py): a file re-read in
   `carry_whole_after` consecutive windows is handed over complete, read from disk at the compaction.
   The carried size enters Lp directly (note_carry).
+* Parallel re-orientation (`reorient`, default off; optlimit/reorient.py): a note behind the summary asks
+  the agent to fetch what it needs in one response.  With it re-reads take fewer calls but bring the same
+  tokens; `reread_premium` (with `reread_productive`) adds (alpha - 1) x those tokens to C.
 * Net rent (`rent_net_reread`, balance mode, default off): the prompt growth of re-read
   calls is left out of the rent.  Re-read Charge already counts those calls inside C, and
   re-reads cluster right after a compaction, so counting them in the rent as well made
@@ -118,6 +121,16 @@ class ControllerConfig:
     # re-read calls of the last `learn_recent` windows; the observed cost of those calls is not used.
     # Needs reread_charge.  Prior codex-luna-medium: L* 47.8K -> 51.6K at r = 3.5, 59.3K at r = 5.
     reread_productive: bool = False
+    # "Re-fetch premium" (default off, with reread_productive): the tokens a window fetches again after
+    # the compaction (prompt growth of its re-read calls, W) are written at the input price a second
+    # time; that premium (alpha - 1) * W is a cost of the compaction and is added to C before the
+    # productive-turn fixed point.  W = mean over the last `learn_recent` windows (0 until the first
+    # one).  Matters when re-reads are batched into one or two calls (optlimit/reorient.py): r falls
+    # but W stays, and r alone would then understate the compaction.  docs/parallel_reorientation.md 3.1(a).
+    reread_premium: bool = False
+    # "Parallel re-orientation" (optlimit/reorient.py): note behind the compaction summary.
+    # "parallel" = fetch everything needed in one response, "plain" = control wording, "off" = none.
+    reorient: str = "off"
     # "File Carry-over": token budget of the block of earlier read outputs the proxy / terminus-2
     # adapter puts behind the summary for frequently re-read files (0 = off; optlimit/carry.py)
     carry_files: int = 0
@@ -155,6 +168,8 @@ class ControllerConfig:
     rent_net_reread: bool = False
 
     def __post_init__(self) -> None:
+        from .reorient import reorient_text
+        reorient_text(self.reorient)              # unknown mode raises here, not at the first compaction
         if self.reread_cost is not None:          # old spelling wins only when given explicitly
             self.reread_charge = bool(self.reread_cost)
             self.reread_cost = None
@@ -207,6 +222,7 @@ class SessionState:
     unc_obs: list[float] = field(default_factory=list)   # uncached fraction of summary-call input
     rr_turn_obs: list[float] = field(default_factory=list)  # re-read model calls per finished window
     rr_cost_obs: list[float] = field(default_factory=list)  # their cost (read units)
+    rr_w_obs: list[float] = field(default_factory=list)     # prompt growth their output caused, per finished window
     window_start_prompt: float | None = None
     carry_now: float = 0.0        # tokens (estimate) of the whole files carried in the current window
     window_turns: int = 0
@@ -279,13 +295,23 @@ class LimitController:
             n = int(c.learn_recent or 0)
             tobs = s.rr_turn_obs[-n:] if n > 0 else s.rr_turn_obs
             r = max((c.reread_turns + sum(tobs)) / (1 + len(tobs)), 0.0)
-            return self.productive_charge(p, r)
+            E = self.refetch_premium(s)
+            return E + self.productive_charge(replace(p, summary_fixed=p.summary_fixed + E) if E > 0 else p, r)
         L = best_threshold(p)
         per_turn = (f(L, p) if L is not None and math.isfinite(f(L, p)) else p.L0 + p.Lp) + c.beta * c.reread_turn_out
         prior = c.reread_turns * per_turn
         obs = s.rr_cost_obs[-int(c.learn_recent):] if c.learn_recent and c.learn_recent > 0 else s.rr_cost_obs
         # re-reads per window vary a lot (0 .. 10+), so the prior keeps the weight of one window
         return max((prior + sum(obs)) / (1 + len(obs)), 0.0)
+
+    def refetch_premium(self, s: SessionState) -> float:
+        """Re-fetch premium: (alpha - 1) * W, W = tokens re-read calls brought back per window (read units)."""
+        c = self.cfg
+        if not c.reread_premium or not s.rr_w_obs:
+            return 0.0
+        n = int(c.learn_recent or 0)
+        obs = s.rr_w_obs[-n:] if n > 0 else s.rr_w_obs
+        return max(c.alpha - 1.0, 0.0) * sum(obs) / len(obs)
 
     def productive_charge(self, p: Params, r: float) -> float:
         """Productive-turn Charge: R = r * (cost per productive turn at the optimum), read units.
@@ -476,6 +502,8 @@ class LimitController:
             s.cached_after_compaction = cached or s.cached_after_compaction
             s.pending_compact = False
             self._flush_compaction_obs(s, prompt, cached)
+            if s.window_idx >= 2:                    # the finished window itself followed a compaction
+                s.rr_w_obs.append(s.rr_growth)
             s.window_start_prompt = prompt
             s.window_turns = 1
             s.rent = 0.0
