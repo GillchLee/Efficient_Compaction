@@ -41,6 +41,11 @@ if [[ "$PROFILE" == harbor25 ]]; then
   # Wait (<= 60 s) for the egress sidecar's DNS before apt: the task container shares the sidecar's
   # network namespace and trials starting together lost apt to "Could not resolve" (2026-11-12).
   sed -i 's|"apt-get": f"DEBIAN_FRONTEND=noninteractive apt-get update \&\& |"apt-get": f"for i in $(seq 1 30); do getent hosts archive.ubuntu.com >/dev/null 2>\&1 \|\| getent hosts deb.debian.org >/dev/null 2>\&1 \&\& break; sleep 2; done; DEBIAN_FRONTEND=noninteractive apt-get update \&\& |' "$TS"
+  # Singularity backend: Harbor waits 60 s for the server it bootstraps inside every container (venv,
+  # get-pip.py, pip install uvicorn fastapi - all downloaded at each start) and gives up after three
+  # such attempts.  With a slow PyPI link two of four starts failed that way (2026-11-23); wait 300 s.
+  SG=$(.venv-h25/bin/python -c "import harbor.environments.singularity.singularity as m; print(m.__file__)" 2>/dev/null || true)
+  [[ -n "$SG" ]] && sed -i 's/^            for i in range(60):$/            for i in range(300):  # optlimit setup.sh: slow in-container bootstrap (was 60)/' "$SG"
   if [[ ! -f .env ]]; then cp .env.example .env; chmod 600 .env; echo "created .env: fill in the keys"; fi
   mkdir -p jobs/logs data
   echo "done (profile harbor25, $(.venv-h25/bin/harbor --version 2>/dev/null | tail -1)). next e.g."

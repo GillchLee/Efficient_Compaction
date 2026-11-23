@@ -4,7 +4,7 @@
 #
 #   cp scripts/slurm/lhtb_par.conf.example scripts/slurm/lhtb_par.conf   # edit ENV_TYPE, TASKS, ...
 #   scp <this host>:.env .env                                             # OPENAI_API_KEY (never commit it)
-#   bash scripts/slurm/setup_server.sh              # code + venv + checks (+ task copies for docker)
+#   bash scripts/slurm/setup_server.sh              # Harbor venv + LHTB tasks + checks
 #   PULL=1 bash scripts/slurm/setup_server.sh       # singularity: also convert the task images now
 #                                                   # (needed when compute nodes cannot reach Docker Hub)
 # Then check a COMPUTE node once (they often differ from the login node):
@@ -15,7 +15,8 @@ CONF=${CONF:-scripts/slurm/lhtb_par.conf}
 [[ -f $CONF ]] || { echo "missing $CONF: cp scripts/slurm/lhtb_par.conf.example $CONF and edit it" >&2; exit 1; }
 # shellcheck disable=SC1090
 source "$CONF"
-ENV_TYPE=${ENV_TYPE:-singularity}
+ENV_TYPE=${ENV_TYPE:-singularity}; HARBOR=${HARBOR:-0.25}
+[[ $HARBOR == 0.25 ]] && VENV=.venv-h25 || VENV=.venv
 [[ -n "${PRE_CMD:-}" ]] && eval "$PRE_CMD"
 fails=0
 pass() { echo "PASS  $*"; }
@@ -23,28 +24,33 @@ warn() { echo "WARN  $*"; }
 fail() { echo "FAIL  $*"; fails=$((fails + 1)); }
 
 if [[ ${1:-} != --check-only ]]; then
-  # 1. run scripts: singularity branch (kept as a patch on the development host)
-  if grep -q 'type: singularity' scripts/run_job.sh; then echo "run scripts already patched"
-  elif patch -p1 --dry-run -s < patches/singularity-run-scripts.patch >/dev/null 2>&1; then
-    patch -p1 -s < patches/singularity-run-scripts.patch && echo "applied patches/singularity-run-scripts.patch"
-  else fail "patches/singularity-run-scripts.patch does not apply to scripts/run_job.sh / run_harness_job.sh"; fi
-
-  # 2. LHTB checkout (pinned commit) + Harbor fork patches (incl. 06 fakeroot) + ./.venv
+  # 1. Harbor + optlimit, and the LHTB checkout (tasks) at the pinned commit
   command -v uv >/dev/null || { echo "missing: uv (curl -LsSf https://astral.sh/uv/install.sh | sh)" >&2; exit 1; }
-  if [[ -x .venv/bin/harbor ]] && grep -q singularity_fakeroot LHTB/harbor/src/harbor/environments/singularity/singularity.py 2>/dev/null; then
+  if [[ $HARBOR == 0.25 ]]; then
+    [[ -x .venv-h25/bin/harbor ]] && echo ".venv-h25 already set up" \
+      || bash setup.sh --profile harbor25 || { echo "setup.sh failed" >&2; exit 1; }
+    if [[ ! -d LHTB/tasks-2.0 ]]; then
+      COMMIT=$(sed -n 's/^LHTB_COMMIT=//p' setup.sh); URL=${LHTB_URL:-https://github.com/zli12321/LHTB}
+      # tasks only (small files): LFS assets are not needed by the 2.0 reconstruction tasks
+      GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 "$URL" LHTB || { echo "cannot clone $URL" >&2; exit 1; }
+      git -C LHTB rev-parse --verify --quiet "$COMMIT^{commit}" >/dev/null || git -C LHTB fetch --depth 1 origin "$COMMIT"
+      GIT_LFS_SKIP_SMUDGE=1 git -C LHTB checkout --quiet --force "$COMMIT" && echo "LHTB at ${COMMIT:0:7}"
+    fi
+  elif [[ -x .venv/bin/harbor ]] && grep -q singularity_fakeroot LHTB/harbor/src/harbor/environments/singularity/singularity.py 2>/dev/null; then
     echo ".venv and ./LHTB already set up"
   else
-    bash setup.sh --profile lhtb || { echo "setup.sh failed" >&2; exit 1; }
+    bash setup.sh --profile lhtb || { echo "setup.sh failed" >&2; exit 1; }   # fork + patches 01-06
   fi
 
-  # 3a. docker: task copies with the container network enabled (the agent must reach the proxy and install Codex)
-  if [[ $ENV_TYPE == docker && ! -d data/lhtb_v2 ]]; then
+  # 2a. docker on the fork: task copies with the container network enabled (the agent must reach the proxy
+  #     and install Codex; Harbor 0.25 ignores the tasks' `network = false`)
+  if [[ $ENV_TYPE == docker && $HARBOR == fork && ! -d data/lhtb_v2 ]]; then
     mkdir -p data && cp -r LHTB/tasks-2.0 data/lhtb_v2
     sed -i -E 's/^(network|allow_internet) = false/\1 = true/' data/lhtb_v2/*/task.toml
     echo "data/lhtb_v2: $(ls -d data/lhtb_v2/*/ | wc -l) task copies with network enabled"
   fi
 
-  # 3b. singularity: convert the task images now (file names as Harbor's cache expects them)
+  # 2b. singularity: convert the task images now (file names as Harbor's cache expects them)
   if [[ $ENV_TYPE == singularity && -n "${PULL:-}" ]]; then
     CACHE=${SIF_CACHE:-./data/sif-cache}; mkdir -p "$CACHE"
     export APPTAINER_CACHEDIR=${APPTAINER_CACHEDIR:-$PWD/data/sif-cache/oci} SINGULARITY_CACHEDIR=${SINGULARITY_CACHEDIR:-$PWD/data/sif-cache/oci}
@@ -61,9 +67,10 @@ if [[ ${1:-} != --check-only ]]; then
   fi
 fi
 
-# 4. checks (login node, and a compute node through srun ... --check-only)
-echo "--- checks on $(hostname) (env $ENV_TYPE)"
-[[ -x .venv/bin/harbor ]] && pass "harbor fork: $(.venv/bin/harbor --version 2>/dev/null | tail -1)" || fail ".venv missing (not visible from this node? the checkout must be on a shared filesystem)"
+# 3. checks (login node, and a compute node through srun ... --check-only)
+echo "--- checks on $(hostname) (env $ENV_TYPE, harbor $HARBOR)"
+[[ -x $VENV/bin/harbor ]] && pass "harbor ($HARBOR): $($VENV/bin/harbor --version 2>/dev/null | tail -1)" || fail "$VENV missing (not visible from this node? the checkout must be on a shared filesystem)"
+[[ -d LHTB/tasks-2.0 ]] && pass "LHTB tasks: $(ls -d LHTB/tasks-2.0/*/ | wc -l) in LHTB/tasks-2.0" || fail "LHTB/tasks-2.0 missing"
 [[ -f .env ]] && grep -q '^OPENAI_API_KEY=.' .env && pass ".env has OPENAI_API_KEY" || fail ".env missing or without OPENAI_API_KEY"
 if [[ $ENV_TYPE == singularity ]]; then
   if command -v singularity >/dev/null; then
@@ -83,7 +90,7 @@ if [[ $ENV_TYPE == singularity ]]; then
   else fail "singularity/apptainer not on PATH (set PRE_CMD=\"module load apptainer\" in $CONF?)"; fi
 else
   docker info >/dev/null 2>&1 && pass "docker usable by $(id -un)" || fail "docker not usable on this node (docker group? daemon running?)"
-  [[ -d data/lhtb_v2 ]] && pass "data/lhtb_v2 task copies" || fail "data/lhtb_v2 missing"
+  [[ $HARBOR != fork || -d data/lhtb_v2 ]] && pass "task directory for docker" || fail "data/lhtb_v2 missing"
 fi
 # network from this node: OpenAI (through the proxy that runs on the node), Codex install (nvm from GitHub, node, npm), apt, images
 for u in https://api.openai.com/v1/models https://registry.npmjs.org/@openai/codex https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh https://nodejs.org/dist/index.json http://deb.debian.org/debian/dists/stable/Release https://registry-1.docker.io/v2/; do

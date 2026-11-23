@@ -13,20 +13,29 @@ cd "$(dirname "$0")/../.."
 CONF=${CONF:-scripts/slurm/lhtb_par.conf}
 [[ -f $CONF ]] || { echo "missing $CONF: cp scripts/slurm/lhtb_par.conf.example $CONF and edit it" >&2; exit 1; }
 # values already in the environment win over the conf file
-OVERRIDES=$(for v in ENV_TYPE ARMS TASKS HOURS ATTEMPTS CONC EFFORT AGENT_VERSION PREMIUM NOTE SUFFIX PARTITION ACCOUNT QOS TIME CPUS_PER_TRIAL MEM_PER_TRIAL_GB EXTRA_SBATCH SIF_CACHE; do
+OVERRIDES=$(for v in ENV_TYPE HARBOR ARMS TASKS HOURS ATTEMPTS CONC EFFORT AGENT_VERSION PREMIUM NOTE SUFFIX PARTITION ACCOUNT QOS TIME CPUS_PER_TRIAL MEM_PER_TRIAL_GB EXTRA_SBATCH SIF_CACHE; do
   if [[ -n "${!v+x}" ]]; then printf '%s=%q\n' "$v" "${!v}"; fi; done)
 # shellcheck disable=SC1090
 source "$CONF"
 eval "$OVERRIDES"
 ENV_TYPE=${ENV_TYPE:-singularity}; HOURS=${HOURS:-3}; ATTEMPTS=${ATTEMPTS:-1}; CONC=${CONC:-2}; NOTE=${NOTE:-parallel}
-PY=.venv/bin/python
-[[ -x $PY ]] || { echo "missing .venv: bash scripts/slurm/setup_server.sh" >&2; exit 1; }
+HARBOR=${HARBOR:-0.25}
+case $HARBOR in
+  0.25) PY=.venv-h25/bin/python; HARBOR_ARGS=(--harbor 0.25) ;;   # stock Harbor; the loop comes from optlimit
+  fork) PY=.venv/bin/python; HARBOR_ARGS=() ;;                    # LHTB's Harbor fork
+  *) echo "HARBOR must be 0.25 or fork, got $HARBOR" >&2; exit 1 ;;
+esac
+[[ -x $PY ]] || { echo "missing ${PY%/bin/python}: bash scripts/slurm/setup_server.sh" >&2; exit 1; }
 
-if [[ $ENV_TYPE == docker ]]; then
-  TASKS_DIR=./data/lhtb_v2          # network-enabled copies (setup_server.sh): the container must reach the proxy
+if [[ $ENV_TYPE == docker && $HARBOR == fork ]]; then
+  # the fork applies `network = false` from container start, so the agent could neither install nor reach
+  # the proxy: network-enabled copies (setup_server.sh).  Harbor 0.25 does not read that key (the tasks run
+  # with a public network), and singularity containers share the node's network: both use the stock tasks.
+  TASKS_DIR=./data/lhtb_v2
   [[ -d $TASKS_DIR ]] || { echo "missing $TASKS_DIR: bash scripts/slurm/setup_server.sh" >&2; exit 1; }
 else
-  TASKS_DIR=./LHTB/tasks-2.0        # singularity containers share the node's network
+  TASKS_DIR=./LHTB/tasks-2.0
+  [[ -d $TASKS_DIR ]] || { echo "missing $TASKS_DIR: bash scripts/slurm/setup_server.sh" >&2; exit 1; }
 fi
 if [[ ${TASKS:-all} == all ]]; then
   # the 30 reconstruction tasks (pre-built image, continue_until_timeout); genetic-convergence-testing is left out
@@ -37,7 +46,7 @@ NT=${#TASK_ARR[@]}
 (( NT > 0 )) || { echo "no tasks" >&2; exit 1; }
 for t in "${TASK_ARR[@]}"; do [[ -d $TASKS_DIR/$t ]] || { echo "unknown task: $t (not in $TASKS_DIR)" >&2; exit 1; }; done
 
-COMMON=(--harness codex --model openai/gpt-6-luna --tasks-dir "$TASKS_DIR" --tasks "${TASK_ARR[@]}"
+COMMON=(--harness codex --model openai/gpt-6-luna "${HARBOR_ARGS[@]}" --tasks-dir "$TASKS_DIR" --tasks "${TASK_ARR[@]}"
         --reasoning-effort "${EFFORT:-medium}" --hours "$HOURS" --env "$ENV_TYPE"
         --concurrent "$CONC" --attempts "$ATTEMPTS")
 [[ -n "${AGENT_VERSION:-}" ]] && COMMON+=(--agent-version "$AGENT_VERSION")
@@ -70,7 +79,7 @@ if [[ -z "${TIME:-}" ]]; then
   TIME=$(printf '%d-%02d:%02d:00' $(( MIN / 1440 )) $(( MIN % 1440 / 60 )) $(( MIN % 60 )))
 fi
 mkdir -p jobs/logs configs/sweep
-echo "env $ENV_TYPE | $NT task(s) x $ATTEMPTS attempt(s) = $TRIALS trial(s) per arm, $CONC_EFF at a time, ${HOURS} h each"
+echo "env $ENV_TYPE, harbor $HARBOR | $NT task(s) x $ATTEMPTS attempt(s) = $TRIALS trial(s) per arm, $CONC_EFF at a time, ${HOURS} h each"
 echo "per arm job: --cpus-per-task $CPUS --mem ${MEM_GB}G --time $TIME"
 for ARM in $ARMS; do
   FLAGS=$(arm_flags "$ARM")

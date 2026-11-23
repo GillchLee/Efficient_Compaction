@@ -55,12 +55,12 @@ def make_app(base_prompt: int, log_path: str | None, tool_rounds: int = 0):
 
     seq = {"n": 0}
 
-    def record(kind: str, body: dict, last_user: str, prompt: int) -> None:
+    def record(kind: str, body: dict, last_user: str, prompt: int, summary: bool | None = None) -> None:
         seq["n"] += 1
         if log_path:
             with open(log_path, "a") as f:
                 f.write(json.dumps({"n": seq["n"], "ts": time.time(), "api": kind, "model": body.get("model"),
-                                    "prompt": prompt, "summary_request": _is_summary(last_user),
+                                    "prompt": prompt, "summary_request": _is_summary(last_user) if summary is None else summary,
                                     "last_user": last_user[:300]}) + "\n")
 
     def _is_summary(text: str) -> bool:
@@ -128,8 +128,25 @@ def make_app(base_prompt: int, log_path: str | None, tool_rounds: int = 0):
         last_user = next((_text_of(i.get("content")) for i in reversed(items)
                           if isinstance(i, dict) and i.get("role") == "user"), "")
         prompt = base_prompt + len(raw) // 4
-        summary = _is_summary(last_user)
-        record("responses", body, last_user, prompt)
+        # Codex >= 0.16x against an OpenAI-type provider compacts remotely: the request ends with a
+        # {"type": "compaction_trigger"} item and the reply must be exactly one "compaction" item
+        remote_compact = bool(items) and isinstance(items[-1], dict) and items[-1].get("type") == "compaction_trigger"
+        summary = _is_summary(last_user) or remote_compact
+        record("responses", body, last_user if not remote_compact else "<compaction_trigger>", prompt, summary=summary)
+        if remote_compact:
+            rid = f"resp_fake_{seq['n']}"
+            item = {"id": f"cmp_fake_{seq['n']}", "type": "compaction",
+                    "encrypted_content": "fake-compaction-" + "x" * 2000}
+            usage = {"input_tokens": prompt, "input_tokens_details": {"cached_tokens": prompt - 550},
+                     "output_tokens": 500, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": prompt + 500}
+            resp = {"id": rid, "object": "response", "status": "completed", "model": body.get("model"),
+                    "output": [item], "usage": usage}
+            return sse([
+                ("response.created", {"type": "response.created", "response": dict(resp, status="in_progress", output=[])}),
+                ("response.output_item.added", {"type": "response.output_item.added", "output_index": 0, "item": item}),
+                ("response.output_item.done", {"type": "response.output_item.done", "output_index": 0, "item": item}),
+                ("response.completed", {"type": "response.completed", "response": resp}),
+            ])
         text = ("Fake checkpoint summary: task read, nothing solved yet." if summary
                 else f"Fake answer {seq['n']}: I looked at the task.")
         rid = f"resp_fake_{seq['n']}"

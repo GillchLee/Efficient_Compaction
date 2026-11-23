@@ -59,6 +59,11 @@ case "$MODEL" in
 esac
 if grep -q '^  type: daytona' "$CONFIG"; then
   [[ -n "${DAYTONA_API_KEY:-}" ]] || { echo "DAYTONA_API_KEY is not set (.env)" >&2; exit 1; }
+elif grep -q '^  type: singularity' "$CONFIG"; then
+  # hosts without Docker (docs/singularity.md): Harbor calls `singularity`; Apptainer ships that name too
+  command -v singularity >/dev/null || { echo "singularity/apptainer is not on PATH" >&2; exit 1; }
+  export SINGULARITY_CACHEDIR=${SINGULARITY_CACHEDIR:-$PWD/data/sif-cache/oci}
+  export APPTAINER_CACHEDIR=${APPTAINER_CACHEDIR:-$SINGULARITY_CACHEDIR}
 elif ! docker info >/dev/null 2>&1; then
   echo "Docker is not running." >&2
   exit 1

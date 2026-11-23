@@ -45,8 +45,11 @@ fi
 python -c "import httpx, starlette, uvicorn" 2>/dev/null \
   || { echo "proxy dependencies missing: uv pip install -e '.[proxy]'" >&2; exit 1; }
 
+SIF=0; grep -q '^  type: singularity' "$CONFIG" && SIF=1
 if [[ -n "${OPTLIMIT_PROXY_HOST:-}" ]]; then
   HOST=$OPTLIMIT_PROXY_HOST
+elif [[ $SIF == 1 ]]; then
+  HOST=127.0.0.1           # singularity containers share the host network namespace
 elif grep -q '^  type: daytona' "$CONFIG"; then
   echo "daytona sandboxes cannot reach a proxy on this host; set OPTLIMIT_PROXY_HOST to a public tunnel host" >&2
   exit 1
@@ -89,7 +92,7 @@ esac
 
 # Harbor >= 0.20 enforces per-task egress allowlists: let the agent container reach the proxy.
 # (--allow-environment-host covers agent setup in tasks whose whole environment is allowlisted.)
-case "$HARBOR_PROFILE" in 0.25*) export HARBOR_EXTRA_ARGS="${HARBOR_EXTRA_ARGS:-} --allow-agent-host $HOST --allow-environment-host $HOST" ;; esac
+[[ $SIF == 1 ]] || case "$HARBOR_PROFILE" in 0.25*) export HARBOR_EXTRA_ARGS="${HARBOR_EXTRA_ARGS:-} --allow-agent-host $HOST --allow-environment-host $HOST" ;; esac
 
 python -m optlimit.serve "${ARGS[@]}" >>"jobs/logs/$JOB_NAME.proxy.out" 2>&1 &
 PROXY_PID=$!

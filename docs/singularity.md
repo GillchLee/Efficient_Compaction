@@ -44,7 +44,6 @@ scp .env <server>:<dir>/Efficient_Compaction_new/.env        # never commit / pa
 
 # on the server
 cd <dir>/Efficient_Compaction_new
-patch -p1 < patches/singularity-run-scripts.patch            # until merged into scripts/ (see below)
 bash setup.sh --profile harbor25                             # .venv-h25: Harbor 0.25.0 + optlimit[proxy]
 bash scripts/check_server.sh
 .venv-h25/bin/python scripts/prep_swebench.py --singularity --subset hard --pull
@@ -90,27 +89,36 @@ Other arms: `--limit native`, `--proxy-fixed 80k`, `--balance codex-luna-medium 
 
 Bring results back for analysis: `jobs/<job>/` and `jobs/logs/<job>*` (proxy logs).
 
-## Pending merge on the main host
-
-`patches/singularity-run-scripts.patch` adds the singularity branch to `scripts/run_job.sh`
-(no Docker check; `.sif` cache env) and `scripts/run_harness_job.sh` (proxy on 127.0.0.1, no
-egress-allowlist flags). It is kept as a patch because those scripts were in use by running jobs;
-apply it with `patch -p1` once they finish.
-
 ## LHTB 2.0 on a Slurm cluster (`scripts/slurm/`)
 
-LHTB needs the Harbor fork (`setup.sh --profile lhtb`, `./.venv`): only it has the
-`continue_until_timeout` loop (verifier rejection -> same conversation continues). Its Singularity
-backend starts containers without `--fakeroot`, so the Codex install (root `apt-get`) fails;
-`patches/lhtb-7ca0cac/06-singularity-fakeroot.patch` adds the kwarg `singularity_fakeroot`, and
-`make_config.py --env singularity` sets it for fork configs. LHTB 2.0 tasks name a pre-built
-`docker_image`, and Singularity containers share the node's network, so the stock task directory
-(`network = false`) works without copies. With Docker the tasks need network-enabled copies
-(`data/lhtb_v2`, made by `setup_server.sh`).
+LHTB tasks set `continue_until_timeout`: after the agent stops, the verifier runs, and on a rejection the
+agent goes on in the same conversation until the budget ends. Two Harbor bases can run that
+(`HARBOR` in `scripts/slurm/lhtb_par.conf`):
+
+| `HARBOR` | venv | where the loop comes from | Singularity |
+|---|---|---|---|
+| `0.25` (default) | `.venv-h25` (stock Harbor 0.25.0) | `optlimit/adapters/harbor25_continue.py`, active when `HB_CONTINUE_MODE=same_conversation` (LHTB configs carry it) | built in (`--fakeroot`) |
+| `fork` | `.venv` (LHTB's Harbor 0.7 + `patches/lhtb-7ca0cac`) | the fork's `trial.py` | needs patch 06 (`singularity_fakeroot`) |
+
+Stock Harbor has no such loop: without the module an LHTB trial on 0.25 ends at the agent's first
+"done". The module wraps `SingleStepTrial._run_agent` (no file of the package is replaced), uses the
+agent's native `resume()` (Codex: `codex exec resume --last`) and the fork's rejection text, and takes
+the grader isolation from LHTB's own stock-Harbor replacement file (`LHTB/harbor/patches/
+single_step.py.harbor-0.20.0`): hidden tests are removed and the verifier's output is moved to
+`<trial>/interim_verifier_artifacts/` before the agent goes on. Every interim verification is a line in
+`<trial>/interim_verifier.jsonl`. Results from the two bases are not interchangeable (different
+Harbor, and the fork leaves the grader's log readable on Docker): keep one base within a comparison.
+
+LHTB 2.0 tasks name a pre-built `docker_image`, and Singularity containers share the node's network,
+so the stock task directory works. With Docker, Harbor 0.25 does not read the tasks' `network = false`
+(it logs "the effective network policy is public"), so the stock directory works there too; the fork
+applies the key from container start and needs network-enabled copies (`data/lhtb_v2`, made by
+`setup_server.sh`). Either way the agent container has network access in these runs, unlike LHTB's
+own leaderboard protocol.
 
 ```bash
-cp scripts/slurm/lhtb_par.conf.example scripts/slurm/lhtb_par.conf     # edit: ENV_TYPE, ARMS, TASKS, HOURS, CONC, Slurm fields
-bash scripts/slurm/setup_server.sh                                     # login node: run-script patch, LHTB + .venv, checks
+cp scripts/slurm/lhtb_par.conf.example scripts/slurm/lhtb_par.conf     # edit: ENV_TYPE, HARBOR, ARMS, TASKS, HOURS, CONC, Slurm fields
+bash scripts/slurm/setup_server.sh                                     # login node: Harbor venv, LHTB tasks, checks
 srun -p <partition> -c 2 --mem 8G -t 10 bash scripts/slurm/setup_server.sh --check-only   # the same checks on a compute node
 PULL=1 bash scripts/slurm/setup_server.sh                              # optional: convert the task images on the login node
 DRY=1 bash scripts/slurm/submit_lhtb_par.sh                            # configs + the sbatch commands, nothing submitted
@@ -119,7 +127,18 @@ bash scripts/slurm/submit_lhtb_par.sh                                  # one Slu
 
 Each arm job (`lhtb_par.sbatch`) starts its own proxy on the node, runs `CONC` trials at a time and
 writes `jobs/luna_lhtb2_cx_<arm>/` and `jobs/logs/luna_lhtb2_cx_<arm>.proxy.jsonl`. Resubmitting an
-arm resumes its job directory. Checked 2026-11-23 without Slurm and without API spend (Apptainer
-1.5.5 in a container, `scripts/fake_llm_upstream.py` as the model): image conversion, fakeroot
-container, Codex 0.171.0 install, proxy on 127.0.0.1, interim verifier + resume loop, compaction
-signal and the re-orientation note. Not checked: a real Slurm allocation.
+arm resumes its job directory (trials without a result are rerun; a trial that ended with an error
+keeps its result and is not).
+
+Harbor 0.25's Singularity backend installs its command server inside every container at start (venv,
+`get-pip.py`, `pip install uvicorn fastapi`) and waits 60 s for it; on a slow PyPI link starts failed
+("Failed to start Singularity FastAPI server after 3 port attempts"). `setup.sh --profile harbor25`
+raises the wait to 300 s. Compute nodes need PyPI for this, besides npm / GitHub / apt for Codex.
+
+Checked 2026-11-23/24 without Slurm and without API spend (`scripts/fake_llm_upstream.py` as the
+model, Apptainer 1.5.5 in a container): on both bases image conversion, fakeroot container, Codex
+0.171.0 install, proxy on 127.0.0.1, interim verifier and same-conversation resume (61 resumes in one
+Codex session on 0.25), compaction (20 remote compactions on 0.25) with the re-orientation note, final
+verifier. Docker with Harbor 0.25 was checked the same way on the development host (41 resumes, 13
+compactions in one session). Not checked: a real Slurm allocation, real-model behaviour over hours,
+Docker with the fork through these scripts.

@@ -2,8 +2,10 @@
 #   cp scripts/slurm/lhtb_par.conf.example scripts/slurm/lhtb_par.conf   # then edit
 # Read by scripts/slurm/setup_server.sh, submit_lhtb_par.sh and lhtb_par.sbatch (plain bash: NAME=value).
 
-# ---- 1. container runtime on the COMPUTE nodes -------------------------------------------------
+# ---- 1. container runtime on the COMPUTE nodes, Harbor ----------------------------------------
 ENV_TYPE=singularity            # singularity (Apptainer; no Docker needed) | docker
+HARBOR=0.25                     # 0.25: stock Harbor (./.venv-h25) + optlimit's continue-until-timeout loop
+                                # fork: LHTB's own Harbor 0.7 (./.venv, patches/lhtb-7ca0cac); the earlier LHTB runs used it
 PRE_CMD=""                      # run first in every job, e.g. "module load apptainer" (empty: nothing)
 SIF_CACHE=./data/sif-cache      # singularity: converted images (~0.3-1 GB per task); a shared filesystem path
 PROXY_HOST=""                   # docker only: address of the node that containers can reach (empty: first address of `hostname -I`)

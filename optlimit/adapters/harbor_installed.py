@@ -333,7 +333,9 @@ class OptlimitCodex(_RobustInstall, Codex):
         return " ".join([f for f in [super().build_cli_flags(), *self._compaction_flags] if f])
 
     async def exec_as_agent(self, environment, command: str, env=None, cwd=None, timeout_sec=None):
-        if self._resume and "codex exec " in command and " -- " in command:
+        # stock Harbor >= 0.20 builds `codex exec resume --last` itself (its native resume()); the LHTB
+        # fork does not, so the resume form is added here only when it is missing
+        if self._resume and "codex exec " in command and " -- " in command and " resume --last " not in command:
             restore = ('if [ -d /logs/agent/sessions ]; then mkdir -p "$CODEX_HOME" && '
                        'cp -R /logs/agent/sessions "$CODEX_HOME/sessions"; fi; ')
             command = restore + command.replace(" -- ", " resume --last -- ", 1)
@@ -354,3 +356,10 @@ class OptlimitCodex(_RobustInstall, Codex):
         finally:
             self._resume = False
         _mark_completed(context)
+
+
+# Stock Harbor (>= 0.20) has no continue-until-timeout loop; with HB_CONTINUE_MODE=same_conversation
+# (LHTB configs) add it for tasks that ask for it.  No-op on the LHTB fork, which has its own.
+from . import harbor25_continue  # noqa: E402
+
+harbor25_continue.install_from_env()
