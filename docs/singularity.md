@@ -96,3 +96,30 @@ Bring results back for analysis: `jobs/<job>/` and `jobs/logs/<job>*` (proxy log
 (no Docker check; `.sif` cache env) and `scripts/run_harness_job.sh` (proxy on 127.0.0.1, no
 egress-allowlist flags). It is kept as a patch because those scripts were in use by running jobs;
 apply it with `patch -p1` once they finish.
+
+## LHTB 2.0 on a Slurm cluster (`scripts/slurm/`)
+
+LHTB needs the Harbor fork (`setup.sh --profile lhtb`, `./.venv`): only it has the
+`continue_until_timeout` loop (verifier rejection -> same conversation continues). Its Singularity
+backend starts containers without `--fakeroot`, so the Codex install (root `apt-get`) fails;
+`patches/lhtb-7ca0cac/06-singularity-fakeroot.patch` adds the kwarg `singularity_fakeroot`, and
+`make_config.py --env singularity` sets it for fork configs. LHTB 2.0 tasks name a pre-built
+`docker_image`, and Singularity containers share the node's network, so the stock task directory
+(`network = false`) works without copies. With Docker the tasks need network-enabled copies
+(`data/lhtb_v2`, made by `setup_server.sh`).
+
+```bash
+cp scripts/slurm/lhtb_par.conf.example scripts/slurm/lhtb_par.conf     # edit: ENV_TYPE, ARMS, TASKS, HOURS, CONC, Slurm fields
+bash scripts/slurm/setup_server.sh                                     # login node: run-script patch, LHTB + .venv, checks
+srun -p <partition> -c 2 --mem 8G -t 10 bash scripts/slurm/setup_server.sh --check-only   # the same checks on a compute node
+PULL=1 bash scripts/slurm/setup_server.sh                              # optional: convert the task images on the login node
+DRY=1 bash scripts/slurm/submit_lhtb_par.sh                            # configs + the sbatch commands, nothing submitted
+bash scripts/slurm/submit_lhtb_par.sh                                  # one Slurm job per arm
+```
+
+Each arm job (`lhtb_par.sbatch`) starts its own proxy on the node, runs `CONC` trials at a time and
+writes `jobs/luna_lhtb2_cx_<arm>/` and `jobs/logs/luna_lhtb2_cx_<arm>.proxy.jsonl`. Resubmitting an
+arm resumes its job directory. Checked 2026-11-23 without Slurm and without API spend (Apptainer
+1.5.5 in a container, `scripts/fake_llm_upstream.py` as the model): image conversion, fakeroot
+container, Codex 0.171.0 install, proxy on 127.0.0.1, interim verifier + resume loop, compaction
+signal and the re-orientation note. Not checked: a real Slurm allocation.

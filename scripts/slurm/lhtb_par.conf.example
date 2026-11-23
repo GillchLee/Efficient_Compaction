@@ -1,0 +1,36 @@
+# Settings for the LHTB 2.0 runs on a Slurm cluster (Codex + GPT-6 Luna, optlimit proxy).
+#   cp scripts/slurm/lhtb_par.conf.example scripts/slurm/lhtb_par.conf   # then edit
+# Read by scripts/slurm/setup_server.sh, submit_lhtb_par.sh and lhtb_par.sbatch (plain bash: NAME=value).
+
+# ---- 1. container runtime on the COMPUTE nodes -------------------------------------------------
+ENV_TYPE=singularity            # singularity (Apptainer; no Docker needed) | docker
+PRE_CMD=""                      # run first in every job, e.g. "module load apptainer" (empty: nothing)
+SIF_CACHE=./data/sif-cache      # singularity: converted images (~0.3-1 GB per task); a shared filesystem path
+PROXY_HOST=""                   # docker only: address of the node that containers can reach (empty: first address of `hostname -I`)
+
+# ---- 2. what to run ----------------------------------------------------------------------------
+# arms (one Slurm job each):
+#   fpt        formula + productive-turn charge                 ("그냥 호출": no note)
+#   fpt_par    fpt + parallel re-orientation note after each compaction
+#   fpt_plain  fpt + control note (same position, no batching instruction)
+#   l80k | l80k_par | l80k_plain      fixed 80K limit, same three variants
+#   formula | formula_par             formula without the productive-turn charge
+#   native                            Codex's own threshold (~245K), proxy only observes
+ARMS="fpt fpt_par"
+TASKS="gdal_antimeridian_clip__01 sqlite_wal_recovery_audit__02"   # task names, or "all" (30 reconstruction tasks)
+HOURS=3                         # agent budget per trial (LHTB's own budget is 1.5)
+ATTEMPTS=1                      # runs of every task per arm
+CONC=2                          # trials running at once inside one arm's job
+EFFORT=medium                   # Codex reasoning effort (the prior codex-luna-medium was measured at medium)
+AGENT_VERSION=0.171.0           # Codex CLI version, pinned so every arm runs the same one (empty: latest at run time)
+PREMIUM=0                       # 1: add the re-fetch premium to the formula arms (--reread-premium)
+SUFFIX=""                       # appended to job names (luna_lhtb2_cx_<arm><SUFFIX>), e.g. _r2 for a second round
+
+# ---- 3. Slurm resources (per arm job) ----------------------------------------------------------
+PARTITION=""                    # sbatch -p (empty: cluster default)
+ACCOUNT=""                      # sbatch -A
+QOS=""                          # sbatch --qos
+TIME=""                         # wall time D-HH:MM:SS (empty: computed from HOURS, tasks, ATTEMPTS, CONC)
+CPUS_PER_TRIAL=2                # LHTB tasks ask for 2 CPUs
+MEM_PER_TRIAL_GB=8              # 4 GB task + writable layer in RAM (singularity) + agent
+EXTRA_SBATCH=""                 # anything else, e.g. "--nodelist=node03 --exclude=node07"

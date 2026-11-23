@@ -91,8 +91,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="static modes: still run the proxy with trigger=off to log every call's usage")
     add_benchmark_args(ap)
     ap.add_argument("--env", choices=["docker", "daytona", "singularity"], default="docker",
-                    help="singularity: Apptainer/Singularity on a host without Docker (Harbor 0.25 profile; tasks need "
-                         "[environment] docker_image, e.g. --benchmark swebench_verified_sif)")
+                    help="singularity: Apptainer/Singularity on a host without Docker (tasks need [environment] "
+                         "docker_image, e.g. --benchmark swebench_verified_sif or lhtb2)")
     ap.add_argument("--sif-cache", metavar="DIR",
                     help="singularity: directory for the converted .sif images (default: $OPTLIMIT_SIF_CACHE at run "
                          "time, else ./data/sif-cache)")
@@ -217,12 +217,14 @@ def main(argv: list[str] | None = None) -> int:
     if a.env == "daytona":
         env["kwargs"] = {"auto_stop_interval_mins": int(hours * 60) + 60, "auto_delete_interval_mins": 30}
     if a.env == "singularity":
-        if harbor == "lhtb-fork":
-            ap.error("--env singularity needs the Harbor 0.25 profile (--harbor 0.25 or a 0.25 benchmark)")
         # singularity_no_mount: Harbor's default "home,tmp,bind-paths" also drops /etc/resolv.conf, so the
         # container has no DNS (agent install, uv/pip in the grader fail); keep the system bind paths
         env["kwargs"] = {"singularity_image_cache_dir": a.sif_cache or "./data/sif-cache",
                          "singularity_no_mount": "home,tmp"}
+        if harbor == "lhtb-fork":
+            # the fork starts containers without --fakeroot; the CLI install needs root
+            # (patches/lhtb-7ca0cac/06-singularity-fakeroot.patch; Harbor 0.25 always passes --fakeroot)
+            env["kwargs"]["singularity_fakeroot"] = True
         env["delete"] = False          # nothing to delete; keeps the .sif cache
     elif harbor != "lhtb-fork" and prof.install_hosts:
         env["extra_allowed_hosts"] = list(prof.install_hosts)   # agent setup runs under the environment baseline
