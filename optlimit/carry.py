@@ -9,7 +9,13 @@ scores into a text block:
 
 * `snapshot_block` - proxy harnesses (Codex): the latest read output the session already saw for
   each scored file, skipped when the file was edited after that read.
-* `disk_block` - terminus-2: the current file contents, read through the task environment.
+* `disk_block` - terminus-2: the current file contents (the head of each file), read through the task
+  environment.
+* `whole_block` - "Whole-file Carry-over" (`carry_whole` = token budget, 0 = off): a file re-read in
+  `carry_whole_after` consecutive windows (default 2) is handed over complete, read from disk at the
+  compaction, and stays so while the agent keeps working on it.  A file is never cut: one that does
+  not fit the remaining budget is left to the snapshot / disk block.  Proxy harnesses read the file
+  through optlimit/envexec.py (the container the request came from), terminus-2 through its own session.
 """
 from __future__ import annotations
 
@@ -23,6 +29,12 @@ SNAPSHOT_HEADER = ("[Carried over from before the context compaction] Output of 
 DISK_HEADER = ("[Carried over from before the context compaction] Current contents of the files you were working "
                "with, read from disk just now. Use them instead of printing the same files again; read a file only "
                "for parts not shown here.")
+
+
+WHOLE_HEADER = ("[Carried over from before the context compaction] Complete current contents of the files you keep "
+                "coming back to, read from disk at the moment of the compaction. You already have these files in "
+                "full: do not print them again. After you edit one of them, only the part you changed differs "
+                "from what is shown here.")
 
 
 ORDERS = ("score", "reread_edited")
@@ -45,9 +57,10 @@ def ranked_files(tracker, order: str = "score") -> list[str]:
 def snapshot_candidates(tracker, order: str = "score") -> list[tuple[str, object]]:
     """Scored files whose latest read snapshot is still current (no edit after it), best first."""
     out = []
+    whole = getattr(tracker, "whole", set())
     for f in ranked_files(tracker, order):
         snap = tracker.snaps.get(f)
-        if snap is None or tracker.last_edit.get(f, -1) > snap.call_seq:
+        if f in whole or snap is None or tracker.last_edit.get(f, -1) > snap.call_seq:
             continue
         out.append((f, snap))
     return out
@@ -75,10 +88,58 @@ def snapshot_block(tracker, budget_tokens: int, per_item_tokens: int = 3000,
         left -= len(body) + len(snap.command) + 40
         used.add(snap.call_seq)
         files.append(f)
+    tracker.carried = set(files) | set(getattr(tracker, "whole", set()))
     if not parts:
         return ""
-    tracker.carried = set(files)
     return SNAPSHOT_HEADER + "\n\n" + "\n\n".join(parts)
+
+
+def read_command(path: str, dirs: list[str], nbytes: int) -> str:
+    """Shell command printing the first `nbytes` bytes of `path` (relative: looked up in `dirs`, then '.')."""
+    if path.startswith("/"):
+        return f"[ -f {shlex.quote(path)} ] && head -c {nbytes} -- {shlex.quote(path)}"
+    ds = " ".join(shlex.quote(d) for d in (list(dirs) + ["."]))
+    return (f"for d in {ds}; do if [ -f \"$d\"/{shlex.quote(path)} ]; then "
+            f"head -c {nbytes} -- \"$d\"/{shlex.quote(path)}; exit 0; fi; done; exit 1")
+
+
+def whole_candidates(tracker, after: int = 2, order: str = "score") -> list[str]:
+    """Files re-read in at least `after` consecutive windows (or carried whole and still worked on), best first."""
+    return [f for f in ranked_files(tracker, order) if tracker.streak.get(f, 0) >= max(int(after), 1)]
+
+
+async def whole_block(tracker, run: Callable[[str], Awaitable[tuple[int, str]]], budget_tokens: int, after: int = 2,
+                      chars_per_token: float = CHARS_PER_TOKEN, order: str = "score",
+                      dirs: list[str] | None = None) -> tuple[str, list[str], list[str]]:
+    """Complete current contents of the files in `whole_candidates`, within `budget_tokens`.
+
+    `run(cmd)` executes a shell command in the task environment and returns (return code, stdout).
+    Returns (block, files carried whole, candidates left out); marks the files in `tracker.whole` and
+    `tracker.carried`.  Left out: missing, empty or binary files and files larger than the budget left."""
+    if budget_tokens <= 0:
+        return "", [], []
+    if dirs is None:
+        wd = getattr(tracker, "workdirs", {})
+        dirs = sorted(wd, key=lambda d: -wd[d])[:6]
+    left = int(budget_tokens * chars_per_token)
+    parts, files, skipped = [], [], []
+    for path in whole_candidates(tracker, after, order):
+        if left < 200:
+            skipped.append(path)
+            continue
+        rc, body = await run(read_command(path, dirs, left + 1))
+        body = body or ""
+        if rc != 0 or not body.strip() or "\x00" in body or len(body) > left:
+            skipped.append(path)
+            continue
+        parts.append(f"$ cat {path}\n{body}")
+        files.append(path)
+        left -= len(body) + len(path) + 8
+    tracker.whole = set(files)
+    tracker.carried = set(getattr(tracker, "carried", set())) | set(files)
+    if not parts:
+        return "", [], skipped
+    return WHOLE_HEADER + "\n\n" + "\n\n".join(parts), files, skipped
 
 
 async def disk_block(tracker, run: Callable[[str], Awaitable[tuple[int, str]]], dirs: list[str],
@@ -89,17 +150,14 @@ async def disk_block(tracker, run: Callable[[str], Awaitable[tuple[int, str]]], 
     left = int(budget_tokens * chars_per_token)
     cap = int(per_item_tokens * chars_per_token)
     parts, files = [], []
+    whole = set(getattr(tracker, "whole", set()))
     for path in ranked_files(tracker, order):
+        if path in whole:                        # already handed over complete (whole_block)
+            continue
         room = min(cap, left)
         if room < 400:
             break
-        if path.startswith("/"):
-            cmd = f"[ -f {shlex.quote(path)} ] && head -c {room + 1} -- {shlex.quote(path)}"
-        else:
-            ds = " ".join(shlex.quote(d) for d in (list(dirs) + ["."]))
-            cmd = (f"for d in {ds}; do if [ -f \"$d\"/{shlex.quote(path)} ]; then "
-                   f"head -c {room + 1} -- \"$d\"/{shlex.quote(path)}; exit 0; fi; done; exit 1")
-        rc, body = await run(cmd)
+        rc, body = await run(read_command(path, dirs, room + 1))
         body = body or ""
         if rc != 0 or not body.strip():
             continue
@@ -108,7 +166,7 @@ async def disk_block(tracker, run: Callable[[str], Awaitable[tuple[int, str]]], 
         parts.append(f"===== {path} =====\n{body}")
         files.append(path)
         left -= len(body) + len(path) + 14
+    tracker.carried = set(files) | whole
     if not parts:
         return "", []
-    tracker.carried = set(files)
     return DISK_HEADER + "\n\n" + "\n\n".join(parts), files

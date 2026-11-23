@@ -10,8 +10,9 @@
 #   harbor:    environment profile the tasks need (setup.sh --profile): lhtb-fork (default; LHTB's
 #              Harbor 0.7 fork + patches/lhtb-7ca0cac, ./.venv) or "0.25" (stock Harbor, ./.venv-h25;
 #              tasks that use agent network allowlists, gpu_types, restore paths, verifier images).
-#              In-process terminus-2 (optlimit.harbor_agent) exists only on lhtb-fork; on "0.25" use
-#              --harness terminus-2-proxy | claude-code | codex.
+#              In-process terminus-2 (optlimit.harbor_agent) runs on both; its --handoff length targets and
+#              the trial-loop options (--verifier-feedback, --hb-env) are lhtb-fork only. On "0.25" there is
+#              also --harness terminus-2-proxy (stock terminus-2 behind the proxy) | claude-code | codex.
 #   harness_kwargs: per-harness agent kwargs the benchmark's official protocol asks for.
 #   environment: overrides for the job's environment block (e.g. delete: false to keep a shared
 #              pre-built image between trials; Harbor's default delete: true removes it).

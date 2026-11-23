@@ -67,10 +67,24 @@ def test_default_profile_writes_no_harbor_line(tmp_path):
     assert "# harbor: 0.25\n" in text
 
 
-def test_in_process_terminus2_refuses_stock_harbor_benchmarks(tmp_path):
-    r = run_mc(tmp_path, "--model", "anthropic/claude-haiku-5-5", "--limit", "80000", "--benchmark", "swe_marathon",
-               "--tasks", "zstd-decoder", check=False)
-    assert r.returncode != 0 and "terminus-2-proxy" in r.stderr
+def test_in_process_terminus2_on_stock_harbor_benchmarks(tmp_path):
+    # the adapter runs on stock Harbor too; only the fork's hand-off prompt hooks / trial-loop options do not
+    text, cfg = run_mc(tmp_path, "--model", "openai/gpt-6-luna", "--formula", "terminus2-gpt-6-luna", "--prices",
+                       "gpt-6-luna", "--learn", "--carry-files", "--carry-whole", "--benchmark", "swe_marathon",
+                       "--tasks", "zstd-decoder")
+    assert "# harbor: 0.25\n" in text and "# proxy:" not in text
+    agent = cfg["agents"][0]
+    assert agent["import_path"] == "optlimit.harbor_agent:OptlimitTerminus2"
+    ol = agent["kwargs"]["optlimit"]
+    assert ol["mode"] == "formula" and ol["learn_lp"] is True and ol["learn_gamma"] is True
+    assert ol["carry_files"] == 8000 and ol["carry_whole"] == 64000
+    text, cfg = run_mc(tmp_path, "--model", "openai/gpt-6-luna", "--limit", "80000", "--benchmark", "swe_marathon",
+                       "--tasks", "zstd-decoder")
+    assert "# harbor: 0.25\n" in text and cfg["agents"][0]["kwargs"]["optlimit"] == {
+        "mode": "fixed", "fixed_limit": 80000, "lookahead": 0}
+    r = run_mc(tmp_path, "--model", "openai/gpt-6-luna", "--limit", "80000", "--benchmark", "swe_marathon",
+               "--tasks", "zstd-decoder", "--handoff", "summary_words=2600", check=False)
+    assert r.returncode != 0 and "--handoff" in r.stderr
 
 
 def test_terminus2_proxy_has_no_static_limit(tmp_path):

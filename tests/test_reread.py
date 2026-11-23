@@ -304,3 +304,153 @@ def test_productive_turn_charge_minimises_cost_per_productive_turn():
     # needs the Re-read Charge
     off = LimitController(ControllerConfig(**base, reread_charge=False, reread_productive=True))
     assert off.on_prompt("s", "main", 12000.0).reread is None
+
+
+# ---------------------------------------------------------------- Whole-file Carry-over
+def _fake_env(files):
+    """run(cmd) for carry.whole_block: serves `files` (absolute path -> text) like the read_command shell snippet."""
+    import re as _re
+
+    async def run(cmd):
+        n = int(_re.search(r"head -c (\d+)", cmd).group(1))
+        for path, text in files.items():
+            base, name = path.rsplit("/", 1)
+            if f"-f {path} ]" in cmd or (_re.search(rf"\b{_re.escape(name)}\b", cmd) and
+                                         any(path == f"{d}/{rel}" for d in _re.findall(r"(/[\w/.-]+)", cmd.split(";")[0])
+                                             for rel in [path[len(d) + 1:]] if path.startswith(d + "/") and f"/{rel} ]" in cmd)):
+                return 0, text[:n]
+        return 1, ""
+    return run
+
+
+def test_streak_counts_consecutive_reread_windows_and_survives_while_carried_whole():
+    t = RereadTracker()
+    t.observe("a", "exec", 'tools.exec_command({cmd:"cat src/a.rs",workdir:"/app"})', "A")
+    t.observe("b", "exec", 'tools.exec_command({cmd:"cat src/b.rs",workdir:"/app"})', "B")
+    t.start_window()
+    assert t.streak == {} and t.workdirs == {"/app": 2}
+    t.observe("c", "exec", 'tools.exec_command({cmd:"cat src/a.rs"})', "A")
+    t.observe("d", "exec", 'tools.exec_command({cmd:"cat src/b.rs"})', "B")
+    t.start_window()
+    assert t.streak == {"src/a.rs": 1, "src/b.rs": 1}
+    t.observe("e", "exec", 'tools.exec_command({cmd:"cat src/a.rs"})', "A")     # b.rs not re-read: its streak ends
+    t.start_window()
+    assert t.streak == {"src/a.rs": 2}
+    t.whole = {"src/a.rs"}                                                      # carried whole in this window ...
+    t.observe("f", "apply_patch", "*** Begin Patch\n*** Update File: src/a.rs\n@@\n-x\n+y\n*** End Patch")
+    t.start_window()
+    assert t.streak == {"src/a.rs": 2} and t.whole == set()                     # ... and edited, not re-read: stays
+    t.whole = {"src/a.rs"}
+    t.observe("g", "exec", 'tools.exec_command({cmd:"cargo build"})', "ok")
+    t.start_window()
+    assert t.streak == {}                                                       # carried but untouched: back to normal
+
+
+@pytest.mark.asyncio
+async def test_whole_block_carries_complete_files_only_and_keeps_them_out_of_the_snapshot_block():
+    from optlimit import carry
+    t = RereadTracker()
+    for i in range(3):                                   # a.rs, big.json re-read in windows 1 and 2; c.rs only in 2
+        t.observe(f"a{i}", "exec", 'tools.exec_command({cmd:"sed -n 1,5p src/a.rs",workdir:"/app"})', "A-old-part")
+        t.observe(f"g{i}", "exec", 'tools.exec_command({cmd:"cat /tmp/big.json"})', "{...}")
+        if i:
+            t.observe(f"c{i}", "exec", 'tools.exec_command({cmd:"cat src/c.rs"})', "C-snapshot")
+        t.start_window()
+    assert carry.whole_candidates(t, 2) == ["/tmp/big.json", "src/a.rs"] and carry.whole_candidates(t, 1)[-1] == "src/c.rs"
+    env = _fake_env({"/app/src/a.rs": "fn main() {}\n" * 40, "/tmp/big.json": "x" * 100_000, "/app/src/c.rs": "C-disk"})
+    text, files, left_out = await carry.whole_block(t, env, 2000, after=2)
+    assert files == ["src/a.rs"] and left_out == ["/tmp/big.json"]          # too large: never cut, left out
+    assert text.startswith(carry.WHOLE_HEADER) and text.endswith("$ cat src/a.rs\n" + "fn main() {}\n" * 40)
+    assert t.whole == {"src/a.rs"}
+    snap = t.carry_block(4000)
+    assert "A-old-part" not in snap and "C-snapshot" in snap and t.carried == {"src/a.rs", "src/c.rs", "/tmp/big.json"}
+    assert await carry.whole_block(t, env, 0) == ("", [], [])
+    t2 = RereadTracker()
+    assert await carry.whole_block(t2, env, 2000) == ("", [], [])
+
+
+def test_carried_size_enters_Lp_at_once_and_is_not_learned_twice():
+    cfg = dict(mode="formula", Lp=2000, L0_mode="fixed", L0_fixed=12000, alpha=10, beta=50, m=1, summary_out=2000,
+               g_prior=2000, learn_lp=True, learn_recent=3, reread_charge=False)
+    ctl = LimitController(ControllerConfig(**cfg))
+    ctl.on_prompt("s", "main", 14000.0, 12000.0)
+    for p in (20000.0, 30000.0):
+        ctl.on_prompt("s", "main", p, p - 2000)
+    plain = ctl.on_prompt("s", "main", 14500.0, 12000.0, window_start_hint=True)      # window without carry
+    s = ctl.session("s")
+    assert s.lp_obs == [2500.0] and ctl.Lp(s) == 2500.0
+    ctl.on_prompt("s", "main", 30000.0, 28000.0)
+    ctl.note_carry("s", 40000)                                                          # 40K carried into the next window
+    d = ctl.on_prompt("s", "main", 54500.0, 12000.0, window_start_hint=True)
+    assert s.lp_obs == [2500.0, 2500.0] and ctl.Lp(s) == 42500.0                        # the limit follows at once
+    assert d.limit > 54500 + 4 * 2000 and d.limit - plain.limit > 40000
+    ctl.on_prompt("s", "main", 56500.0, 54500.0)
+    ctl.note_carry("s", 0)                                                              # carry ends: Lp falls back
+    ctl.on_prompt("s", "main", 14500.0, 12000.0, window_start_hint=True)
+    assert ctl.Lp(s) == 2500.0
+    assert LimitController(ControllerConfig(**cfg)).Lp(LimitController(ControllerConfig(**cfg)).session("x")) == 2000
+
+
+def test_pick_container_follows_the_compose_project_to_the_main_service():
+    from optlimit.envexec import pick_container
+    def c(i, ip, project=None, service=None):
+        return {"Id": i, "NetworkSettings": {"Networks": {"n": {"IPAddress": ip}} if ip else {}},
+                "Config": {"Labels": ({"com.docker.compose.project": project, "com.docker.compose.service": service}
+                                      if project else {})}}
+    side = c("side", "172.20.0.2", "trial-a", "harbor-docker-egress-control-sidecar")
+    main = c("main", "", "trial-a", "main")                    # shares the sidecar's network namespace: no address
+    other = c("other", "172.21.0.2", "trial-b", "main")
+    assert pick_container([other, main, side], "172.20.0.2") == "main"
+    assert pick_container([other, main, side], "172.21.0.2") == "other"
+    assert pick_container([c("plain", "172.17.0.3")], "172.17.0.3") == "plain"
+    assert pick_container([other, main, side], "10.0.0.9") is None
+
+
+@pytest.mark.asyncio
+async def test_proxy_carries_a_file_whole_after_two_consecutive_reread_windows(tmp_path):
+    seen, asked = [], []
+
+    async def upstream(request):
+        body = json.loads(await request.body())
+        seen.append(body)
+        n = sum(len(json.dumps(x)) for x in body["input"])
+        return JSONResponse({"id": "r", "object": "response", "output": [],
+                             "usage": {"input_tokens": 12000 + n, "input_tokens_details": {"cached_tokens": 12000},
+                                       "output_tokens": 100, "total_tokens": 12100 + n}})
+
+    disk = "fn main() { /* the whole file */ }\n" * 30
+
+    async def env_run(ip, cmd):
+        asked.append((ip, cmd))
+        return (0, disk) if "src/a.rs" in cmd and "/app" in cmd else (1, "")
+
+    cfg = ProxyConfig(trigger="off", log_path=str(tmp_path / "log.jsonl"), env_run=env_run,
+                      controller=ControllerConfig(mode="formula", Lp=1700, L0_mode="fixed", L0_fixed=12000, alpha=10,
+                                                  beta=50, m=1, summary_out=1700, g_prior=2000, carry_files=4000,
+                                                  carry_whole=5000, learn_lp=True),
+                      transport=httpx.ASGITransport(app=Starlette(routes=[Route("/v1/responses", upstream, methods=["POST"])])))
+    app = create_app(cfg)
+    task = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "port the service"}]}
+    hs = [{"x-client-request-id": "T", "x-codex-window-id": f"T:{i}"} for i in range(4)]
+    def read(cid):
+        return [{"type": "custom_tool_call", "name": "exec", "call_id": cid,
+                 "input": 'const r = await tools.exec_command({cmd:"sed -n 1,3p src/a.rs",workdir:"/app"});'},
+                {"type": "custom_tool_call_output", "call_id": cid, "output": "A-part"}]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://p") as c:
+        await c.post("/v1/responses", json={"model": "m", "input": [task] + read("r0")}, headers=hs[0])
+        for w in (1, 2, 3):
+            cmp_ = {"type": "compaction", "id": f"cmp_{w}", "encrypted_content": "x"}
+            await c.post("/v1/responses", json={"model": "m", "input": [task, cmp_]}, headers=hs[w])
+            await c.post("/v1/responses", json={"model": "m", "input": [task, cmp_] + read(f"r{w}")},
+                         headers=hs[w])
+    recs = [json.loads(l) for l in open(tmp_path / "log.jsonl")]
+    starts = [r for r in recs if r.get("reread_window")]
+    assert [r["reread_window"]["window"] for r in starts] == [0, 1, 2]
+    assert "carry_whole" not in starts[0] and starts[1]["carry_whole"]["files"] == []      # one re-read window so far
+    assert starts[2]["carry_whole"]["files"] == ["src/a.rs"] and starts[2]["carry"]["files"] == ["src/a.rs"]
+    assert len(asked) == 1 and "/app" in asked[0][1]
+    blocks = [b["input"][2]["content"][0]["text"] for b in seen[5:]]
+    assert blocks[0] == blocks[1] and blocks[0].endswith("$ cat src/a.rs\n" + disk) and "A-part" not in blocks[0]
+    s = app.state.controller.session("cx:T")
+    assert s.carry_now == pytest.approx(len(blocks[0]) / 3.5)
+    assert "A-part" in seen[3]["input"][2]["content"][0]["text"]            # window 2: still the snapshot of the read

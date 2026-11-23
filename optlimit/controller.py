@@ -47,6 +47,9 @@ Re-reads after a compaction (optlimit/reread.py detects them) feed three separat
 * File Carry-over (`carry_files` > 0, default off; optlimit/carry.py): the latest read output
   of the files the agent keeps re-reading is attached behind the summary.  Changes *what* a
   compaction hands over; the controller only carries the budget.
+* Whole-file Carry-over (`carry_whole` > 0, default off; optlimit/carry.py): a file re-read in
+  `carry_whole_after` consecutive windows is handed over complete, read from disk at the compaction.
+  The carried size enters Lp directly (note_carry).
 * Net rent (`rent_net_reread`, balance mode, default off): the prompt growth of re-read
   calls is left out of the rent.  Re-read Charge already counts those calls inside C, and
   re-reads cluster right after a compaction, so counting them in the rent as well made
@@ -122,6 +125,13 @@ class ControllerConfig:
     # which files go into the block first: "score" (re-read score) or "reread_edited" (files the last
     # window both re-read and edited first, then by score)
     carry_order: str = "score"
+    # "Whole-file Carry-over": token budget for files handed over complete (0 = off).  A file re-read
+    # in `carry_whole_after` consecutive windows is read from disk at the compaction and carried in full
+    # (never cut; a file that does not fit stays with the snapshot block).  The carried size is known
+    # before the window starts, so it is added to Lp at once instead of being learned over
+    # `learn_recent` windows (note_carry).
+    carry_whole: int = 0
+    carry_whole_after: int = 2
     # minimum window from information loss: a compaction costs `reacq_turns` extra turns of
     # re-acquisition (analysis/reacquisition.py); keep that share of turns below reacq_eps,
     # i.e. K >= reacq_turns / reacq_eps, and charge those turns in the per-turn cost
@@ -198,6 +208,7 @@ class SessionState:
     rr_turn_obs: list[float] = field(default_factory=list)  # re-read model calls per finished window
     rr_cost_obs: list[float] = field(default_factory=list)  # their cost (read units)
     window_start_prompt: float | None = None
+    carry_now: float = 0.0        # tokens (estimate) of the whole files carried in the current window
     window_turns: int = 0
     rent: float = 0.0             # balance mode: sum over the window of (P_t - P_start)
     rr_growth: float = 0.0        # prompt growth of this window's re-read calls (Net rent)
@@ -242,6 +253,13 @@ class LimitController:
         s = self.session(key)
         s.rr_turn_obs.append(float(turns))
         s.rr_cost_obs.append(float(cost))
+
+    def note_carry(self, key: str, tokens: float) -> None:
+        """Whole-file Carry-over: size of the files carried into the window that is starting (tokens).
+
+        Call before the first prompt of the window is reported.  Lp = learned rest + this, so the
+        limit follows the carried size from the first turn."""
+        self.session(key).carry_now = max(float(tokens), 0.0)
 
     def note_reread_growth(self, key: str) -> None:
         """The tool calls whose output the next main prompt carries included a re-read (Net rent)."""
@@ -292,7 +310,7 @@ class LimitController:
 
     def _flush_compaction_obs(self, s: SessionState, prompt: float, cached: float) -> None:
         if prompt - cached > 0:
-            s.lp_obs.append(prompt - cached)
+            s.lp_obs.append(prompt - cached - s.carry_now)   # carry_now is added back in Lp()
         if s._summ_out > 0:
             s.so_obs.append(s._summ_out)
         if s._summ_prompt > 0:
@@ -312,7 +330,8 @@ class LimitController:
         return (w * prior + sum(obs)) / (w + len(obs))
 
     def Lp(self, s: SessionState) -> float:
-        return self._shrunk(self.cfg.Lp, s.lp_obs) if self.cfg.learn_lp else self.cfg.Lp
+        lp = self._shrunk(self.cfg.Lp, s.lp_obs) if self.cfg.learn_lp else self.cfg.Lp
+        return max(lp + s.carry_now, 0.0)
 
     def summary_out(self, s: SessionState) -> float | None:
         c = self.cfg

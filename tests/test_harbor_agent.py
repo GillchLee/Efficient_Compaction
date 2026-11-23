@@ -158,3 +158,102 @@ def test_single_handoff_replaces_three_calls(tmp_path):
     with pytest.raises(ValueError):
         OptlimitTerminus2(logs_dir=tmp_path, model_name="openai/gpt-4o-mini", optlimit={"mode": "off"},
                           handoff={"mode": "double"}, proactive_summarization_threshold=0, record_terminal_session=False)
+
+
+def test_stock_harbor_usage_comes_from_the_response(tmp_path, monkeypatch):
+    # stock Harbor's Chat has no last_usage: the adapter keeps the usage of the response _query_llm returned
+    agent = _agent(tmp_path, {"mode": "fixed", "fixed_limit": 50000, "lookahead": 0})
+    usages = iter([SimpleNamespace(prompt_tokens=2000, cache_tokens=0, completion_tokens=5),
+                   SimpleNamespace(prompt_tokens=52000, cache_tokens=2000, completion_tokens=5)])
+
+    async def base_query(self, chat, prompt, *a, **k):
+        return SimpleNamespace(content="{}", usage=next(usages))
+
+    monkeypatch.setattr(harbor.agents.terminus_2.terminus_2.Terminus2, "_query_llm", base_query)
+    done = []
+
+    async def fake_summarize(chat, instruction, session):
+        done.append(1)
+        return ("handoff", None)
+
+    agent._summarize = fake_summarize
+    chat = SimpleNamespace(messages=[])                      # no last_usage attribute at all
+
+    async def run():
+        assert await agent._check_proactive_summarization(chat, "task", None) is None   # nothing called yet
+        await agent._query_llm(chat, "p", "task", None)
+        assert await agent._check_proactive_summarization(chat, "task", None) is None
+        await agent._query_llm(chat, "p", "task", None)
+        return await agent._check_proactive_summarization(chat, "task", None)
+
+    assert asyncio.run(run()) == ("handoff", None) and done == [1]
+
+
+def test_whole_file_carry_after_two_consecutive_reread_windows(tmp_path):
+    from optlimit.carry import DISK_HEADER, WHOLE_HEADER
+    agent = _agent(tmp_path, {"mode": "fixed", "fixed_limit": 50000, "lookahead": 0, "carry_files": 2000,
+                              "carry_whole": 20000})
+    body = "".join(f"fn f{i}() {{}}\n" for i in range(1500))          # ~20 KB: more than one carry_files item
+    ran = []
+
+    class Env:
+        async def exec(self, command, timeout_sec=None):
+            ran.append(command)
+            n = int(command.split("head -c ")[1].split()[0])
+            ok = "/app/src/main.rs" in command
+            return SimpleNamespace(return_code=0 if ok else 1, stdout=body[:n] if ok else "")
+
+    session = SimpleNamespace(environment=Env())
+
+    async def fake_summarize(chat, instruction, session):
+        return ("Here are the answers the other agent provided.", None)
+
+    agent._summarize = fake_summarize
+    chat = FakeChat()
+
+    async def step(prompt, cached, keys):
+        chat.messages.append({"role": "assistant", "content": json.dumps({"commands": [{"keystrokes": keys}]})})
+        chat.last_usage = SimpleNamespace(prompt_tokens=prompt, cache_tokens=cached, completion_tokens=10)
+        return await agent._check_proactive_summarization(chat, "task", session)
+
+    async def window(first_prompt):
+        assert await step(first_prompt, 0, "cat /app/src/main.rs\n") is None
+        return await step(52000, 30000, "cargo build\n")
+
+    h1 = asyncio.run(window(2000))                 # first window: nothing can be a re-read yet
+    h2 = asyncio.run(window(9000))                 # re-read once: the head of the file (File Carry-over)
+    h3 = asyncio.run(window(11000))                # re-read in two consecutive windows: the whole file
+    assert WHOLE_HEADER not in h1[0] and WHOLE_HEADER not in h2[0]
+    assert DISK_HEADER in h2[0] and "[... truncated ...]" in h2[0] and body not in h2[0]
+    assert WHOLE_HEADER in h3[0] and body in h3[0] and h3[0].startswith("Here are the answers")
+    assert DISK_HEADER not in h3[0]                # the file is not repeated in the head block
+    s = agent._ctl.session("main")
+    assert abs(s.carry_now - (len(WHOLE_HEADER) + len(body) + 26) / 3.5) < 20
+    recs = [json.loads(l) for l in (tmp_path / "optlimit_decisions.jsonl").read_text().splitlines()]
+    cw = [r.get("carry_whole") for r in recs if r.get("action") == "summarize"]
+    assert cw[0] is None and cw[1]["files"] == [] and cw[2]["files"] == ["/app/src/main.rs"]
+    # carried whole and not touched in the next window: back to nothing
+    assert asyncio.run(step(30000, 0, "cargo test\n")) is None
+    h4 = asyncio.run(step(52000, 30000, "cargo build\n"))
+    assert WHOLE_HEADER not in h4[0] and agent._ctl.session("main").carry_now == 0.0
+
+
+def test_handoff_length_targets_need_the_fork(tmp_path):
+    if hasattr(harbor.agents.terminus_2.terminus_2.Terminus2, "_summary_prompt"):
+        pytest.skip("patched fork: the hooks exist")
+    with pytest.raises(ValueError, match="LHTB Harbor fork"):
+        OptlimitTerminus2(logs_dir=tmp_path, model_name="openai/gpt-4o-mini", optlimit={"mode": "off"},
+                          handoff={"summary_words": 2600}, proactive_summarization_threshold=0,
+                          record_terminal_session=False)
+
+
+def test_adapter_kwargs_pass_the_harbor_preflight():
+    # stock Harbor validates kwargs before the constructor runs (extra = forbid)
+    model = getattr(OptlimitTerminus2, "options_model", None)
+    if model is None:
+        pytest.skip("this Harbor has no options_model")
+    o = model.model_validate({"parser_name": "json", "optlimit": {"mode": "fixed", "fixed_limit": 80000},
+                              "handoff": {"mode": "single"}, "llm_call_kwargs": {"max_tokens": 32768}})
+    assert o.optlimit["fixed_limit"] == 80000
+    with pytest.raises(Exception):
+        model.model_validate({"optlimt": {}})

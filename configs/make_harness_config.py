@@ -67,6 +67,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="File Carry-over: which files go into the block first. score (default): re-read score; "
                          "reread_edited: files the last window both re-read and edited first. "
                          "Same as --set carry_order=NAME")
+    ap.add_argument("--carry-whole", nargs="?", const="64000", metavar="TOKENS",
+                    help="Whole-file Carry-over (terminus-2; Codex on docker): a file re-read in consecutive windows is handed over "
+                         "complete, read from disk at the compaction, within this token budget for all such files "
+                         "(default 64000 when given without a value; off when absent). A file is never cut: one that "
+                         "does not fit stays with --carry-files. Same as --set carry_whole=N")
+    ap.add_argument("--carry-whole-after", type=int, default=None, metavar="N",
+                    help="Whole-file Carry-over: consecutive windows that must re-read a file before it is carried "
+                         "whole (default 2). Same as --set carry_whole_after=N")
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="extra controller field")
     ap.add_argument("--attach-orphan-summaries", action="store_true",
                     help="proxy: charge compaction calls with a new message root (terminus-2 questions "
@@ -114,6 +122,12 @@ def main(argv: list[str] | None = None) -> int:
         a.set.append("rent_net_reread=true")
     if a.carry_files:
         a.set.append("carry_files=" + str(int(float(a.carry_files.lower().rstrip("k")) * (1000 if a.carry_files.lower().endswith("k") else 1))))
+    if a.carry_whole:
+        a.set.append("carry_whole=" + str(int(float(a.carry_whole.lower().rstrip("k")) * (1000 if a.carry_whole.lower().endswith("k") else 1))))
+    if a.carry_whole_after is not None:
+        if not a.carry_whole:
+            ap.error("--carry-whole-after needs --carry-whole")
+        a.set.append("carry_whole_after=" + str(a.carry_whole_after))
     if a.carry_order:
         if not a.carry_files:
             ap.error("--carry-order needs --carry-files")

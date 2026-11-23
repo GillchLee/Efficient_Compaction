@@ -34,6 +34,18 @@ stock threshold check still runs (safety net). Every decision is appended to
 `mode: off` never compacts on its own (stock behaviour) but still logs the prompts, so the
 same agent class can run the native baseline.
 
+Harbor versions. On the patched LHTB fork the usage comes from `chat.last_usage`. Stock Harbor
+(0.25 profile: SWE-Marathon, SWE-bench, ...) has no such field, so the adapter keeps the usage of
+the response `_query_llm` returned; nothing else differs. The `handoff:` length targets need the
+prompt hooks of patches/lhtb-7ca0cac/02 and are refused on stock Harbor (`mode: single` works).
+
+Re-reads and carry-over. The adapter feeds the commands of every reply to the re-read tracker
+(optlimit/reread.py): the controller charges the re-read calls to the compaction (Re-read Charge).
+`carry_files: N` appends the head of the files the agent keeps re-reading to the hand-off (File
+Carry-over, read from disk through the session); `carry_whole: N` hands a file over complete once
+it was re-read in `carry_whole_after` consecutive windows (Whole-file Carry-over). The size of the
+whole files goes to the controller (`note_carry`), so the limit follows from the first turn.
+
 Adaptive terms. `learn_lp / learn_summary_out / learn_gamma: true` in the optlimit block make
 the controller replace the prior Lp, summary output and cache multiplier by what this run's
 compactions show (the agent feeds every summarization call's usage to the controller through
@@ -67,7 +79,7 @@ from harbor.agents.terminus_2.terminus_2 import Terminus2
 
 from ..controller import LimitController, config_from_spec, load_prices
 from ..dialects import _keystrokes
-from ..carry import disk_block
+from ..carry import CHARS_PER_TOKEN, disk_block, whole_block
 from ..reread import RereadTracker
 
 import re
@@ -77,6 +89,14 @@ from .terminus2_handoff import HandoffPromptsMixin
 
 class OptlimitTerminus2(HandoffPromptsMixin, Terminus2):
 
+    # Harbor >= 0.20 validates agent kwargs against a pydantic options_model (extra = forbid), also in a
+    # preflight before the constructor runs: declare the two kwargs of this adapter there. The LHTB fork
+    # has no options_model and takes any kwarg.
+    if getattr(Terminus2, "options_model", None) is not None:
+        options_model = type("OptlimitTerminus2Options", (Terminus2.options_model,),
+                             {"__annotations__": {"optlimit": dict | None, "handoff": dict | None},
+                              "optlimit": None, "handoff": None, "__module__": __name__})
+
     def __init__(self, logs_dir: Path, model_name: str | None = None, optlimit: dict | None = None,
                  handoff: dict | None = None, **kwargs):
         super().__init__(logs_dir=logs_dir, model_name=model_name, **kwargs)
@@ -85,9 +105,14 @@ class OptlimitTerminus2(HandoffPromptsMixin, Terminus2):
         self._ol_prices_mtime = self._prices_mtime() if self._ol_prices_row else None
         self._ol_cfg = config_from_spec(optlimit)
         self._handoff = self.validate_handoff(handoff)
+        if any(k != "mode" for k in self._handoff) and self._handoff.get("mode", "stock") != "single" \
+                and not hasattr(Terminus2, "_summary_prompt"):
+            raise ValueError("handoff length targets need the patched LHTB Harbor fork (patches/lhtb-7ca0cac/02); "
+                             "this Harbor has no prompt hooks. Use handoff.mode: single or drop the block.")
         self._ctl = LimitController(self._ol_cfg)
         self._ol_key = "main"
         self._ol_seen = None          # last UsageInfo object the controller has consumed
+        self._ol_usage = None         # usage of the last main response (stock Harbor: Chat has no last_usage)
         self._ol_boundary = False     # a summarization happened: the next prompt starts a window
         self._ol_rr = RereadTracker()  # re-reads after a compaction (cost term; carry-over when carry_files > 0)
         self._ol_dirs: list[str] = []  # directories the agent cd'ed to, newest first
@@ -141,8 +166,15 @@ class OptlimitTerminus2(HandoffPromptsMixin, Terminus2):
                                          completion=float(usage_info.completion_tokens or 0))
 
     # ------------------------------------------------------------------ the hook
+    async def _query_llm(self, chat, prompt, *args, **kwargs):
+        resp = await super()._query_llm(chat, prompt, *args, **kwargs)
+        usage = getattr(resp, "usage", None)
+        if usage is not None:
+            self._ol_usage = usage
+        return resp
+
     async def _check_proactive_summarization(self, chat, original_instruction, session):
-        usage = getattr(chat, "last_usage", None)
+        usage = getattr(chat, "last_usage", None) or self._ol_usage
         if usage is None or usage is self._ol_seen:
             # first episode of a chat, or the previous episode made no new main call
             return await super()._check_proactive_summarization(chat, original_instruction, session)
@@ -151,6 +183,8 @@ class OptlimitTerminus2(HandoffPromptsMixin, Terminus2):
 
         d = self._ctl.on_prompt(self._ol_key, "main", float(usage.prompt_tokens),
                                 cached=float(usage.cache_tokens or 0), window_start_hint=self._ol_boundary)
+        if d.window_start and not self._ol_boundary:
+            self._ctl.note_carry(self._ol_key, 0.0)   # a compaction the adapter did not run: nothing was carried
         self._ol_boundary = False
         rec = {"ts": time.time(), "prompt": usage.prompt_tokens, "cached": usage.cache_tokens,
                **d.as_dict(), "action": None}
@@ -184,14 +218,30 @@ class OptlimitTerminus2(HandoffPromptsMixin, Terminus2):
             if w >= 1:
                 self._ctl.note_reread(self._ol_key, turns, cost)
             rec["reread_window"] = {"window": w, "turns": turns, "cost": round(cost)}
-            if self._ol_cfg.carry_files > 0:
+            c = self._ol_cfg
+            whole = block = ""
+            if c.carry_whole > 0 and w >= 1:
+                # files re-read window after window: complete, from the task environment's disk
+                try:
+                    whole, wfiles, wskip = await whole_block(self._ol_rr, self._ol_env_run(session), c.carry_whole,
+                                                             c.carry_whole_after, order=c.carry_order,
+                                                             dirs=self._ol_dirs)
+                    rec["carry_whole"] = {"chars": len(whole), "files": wfiles, "left_out": wskip[:40]}
+                except Exception as e:
+                    self.logger.warning(f"optlimit: whole-file carry failed: {e}")
+                    whole = ""
+            self._ctl.note_carry(self._ol_key, len(whole) / CHARS_PER_TOKEN)
+            if c.carry_files > 0:
                 try:
                     block, files = await self._ol_carry_block(session)
                     if block:
-                        result = (result[0] + "\n\n" + block, result[1])
                         rec["carry"] = {"chars": len(block), "files": files}
                 except Exception as e:
                     self.logger.warning(f"optlimit: carry-over failed: {e}")
+                    block = ""
+            extra = "\n\n".join(x for x in (whole, block) if x)
+            if extra:
+                result = (result[0] + "\n\n" + extra, result[1])
         self._ol_log(rec)
         return result
 
@@ -216,11 +266,16 @@ class OptlimitTerminus2(HandoffPromptsMixin, Terminus2):
                                    float(usage.completion_tokens or 0))
         return self._ol_rr.close_turn(cost)
 
-    async def _ol_carry_block(self, session) -> tuple[str, list[str]]:
-        """File Carry-over: current contents of the files the agent keeps re-reading (optlimit/carry.py)."""
+    @staticmethod
+    def _ol_env_run(session):
+        """`run(cmd) -> (return code, stdout)` in the task environment of this trial."""
         async def run(cmd: str) -> tuple[int, str]:
             res = await session.environment.exec(command=cmd, timeout_sec=20)
             return res.return_code, res.stdout or ""
+        return run
+
+    async def _ol_carry_block(self, session) -> tuple[str, list[str]]:
+        """File Carry-over: current contents of the files the agent keeps re-reading (optlimit/carry.py)."""
         c = self._ol_cfg
-        return await disk_block(self._ol_rr, run, self._ol_dirs, c.carry_files, c.carry_item_tokens,
-                                order=c.carry_order)
+        return await disk_block(self._ol_rr, self._ol_env_run(session), self._ol_dirs, c.carry_files,
+                                c.carry_item_tokens, order=c.carry_order)

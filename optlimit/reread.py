@@ -11,7 +11,8 @@ it when a window starts (`start_window`); it reports
 * how many model calls of the finished window re-read a file last seen in an earlier window
   (the controller charges them to the compaction: `ControllerConfig.reread_charge`), and
 * per-file re-read scores, which File Carry-over (optlimit/carry.py) turns into a block for the
-  next window.
+  next window, and `streak`: for how many consecutive windows a file has been re-read (File Carry-over
+  hands a file over whole from `carry_whole_after` such windows on).
 
 A call counts as a re-read when it is a read-type call (cat/sed -n/head/rg/grep/ls/git diff/...,
 or a Read/Grep/Glob tool) that names a file path which already appeared in a call of an earlier
@@ -34,6 +35,7 @@ PATH = re.compile(r"[\w./@+-]*[\w@+-]\.(?:rs|py|pyi|ts|tsx|js|jsx|mjs|cjs|rb|tom
 READ_TOOLS = {"read", "grep", "glob", "view", "ls", "read_file", "list_dir", "search"}
 EDIT_TOOLS = {"edit", "write", "multiedit", "notebookedit", "apply_patch", "str_replace_editor", "str_replace_based_edit_tool",
               "write_file", "create_file"}
+WORKDIR = re.compile(r'\\?["\']?workdir\\?["\']?\s*:\s*\\?["\'](/[^"\'\\]{1,200})')   # exec_command({cmd:..., workdir:"/app"})
 CMD_IN_JS = re.compile(r'cmd:\s*("(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`|\'(?:[^\'\\]|\\.)*\')', re.S)
 
 
@@ -96,6 +98,9 @@ class RereadTracker:
     score: dict = field(default_factory=dict)          # canonical path -> re-read score
     snaps: dict = field(default_factory=dict)          # canonical path -> latest read snapshot
     carried: set = field(default_factory=set)          # paths in the carry block of the current window
+    streak: dict = field(default_factory=dict)         # canonical path -> consecutive finished windows that re-read it
+    whole: set = field(default_factory=set)            # paths carried as whole files in the current window
+    workdirs: dict = field(default_factory=dict)       # working directory -> calls that ran there (relative paths)
     hot: set = field(default_factory=set)              # files the last finished window re-read AND edited
     _canon: dict = field(default_factory=dict)
     _reread_now: set = field(default_factory=set)      # files re-read in the current window
@@ -126,6 +131,8 @@ class RereadTracker:
                 return False
             self._seen_ids.add(call_id)
         self.seq += 1
+        for d in WORKDIR.findall(text or ""):
+            self.workdirs[d] = self.workdirs.get(d, 0) + 1
         is_read, is_edit, paths = classify_call(name, text)
         files = [self.canon(p) for p in paths]
         reread = False
@@ -172,6 +179,13 @@ class RereadTracker:
                 self.score.pop(f, None)
             else:
                 self.score[f] = s
+        for f in set(self.streak) | self._reread_now:
+            if f in self._reread_now:
+                self.streak[f] = self.streak.get(f, 0) + 1
+            elif f in self.whole and f in self._touched_now:
+                pass                                      # carried whole and still worked on: stays whole
+            else:
+                self.streak.pop(f, None)
         if self.window == 0:
             # nothing can be a re-read before the first compaction: seed with the files edited so far
             for f in self.last_edit:
@@ -180,6 +194,7 @@ class RereadTracker:
         self.window += 1
         self.reread_turns, self.reread_cost = 0, 0.0
         self._reread_now, self._touched_now, self._edited_now, self.carried = set(), set(), set(), set()
+        self.whole = set()
         self._pending_turn = False
         return done
 

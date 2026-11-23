@@ -58,7 +58,7 @@ HERE = Path(__file__).resolve().parent
 
 
 sys.path.insert(0, str(HERE))
-from _common import DEFAULT_HARBOR, add_benchmark_args, benchmark_extras, continue_env_line  # noqa: E402
+from _common import DEFAULT_HARBOR, add_benchmark_args, benchmark_extras, continue_env_line, harbor_header_line  # noqa: E402
 from _common import benchmark_environment, resolve_benchmark, short_model  # noqa: E402
 from _common import repo_relative as _repo_relative  # noqa: E402
 
@@ -85,6 +85,9 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--balance", metavar="PRIOR", help="optlimit balance (DTAP) mode with this prior")
     g.add_argument("--native-threshold", type=int, metavar="N")
     ap.add_argument("--prices", help="configs/prices.json row (formula mode)")
+    ap.add_argument("--learn", action="store_true",
+                    help="learn Lp, summary output and gamma from this run's own compactions "
+                         "(same as --set learn_lp=true --set learn_summary_out=true --set learn_gamma=true)")
     ap.add_argument("--no-reread-charge", action="store_true",
                     help="Re-read Charge off: do not add the cost of post-compaction re-reads to C "
                          "(on by default for formula/balance). Same as --set reread_charge=false")
@@ -103,6 +106,14 @@ def main(argv: list[str] | None = None) -> int:
                     help="File Carry-over: which files go into the block first. score (default): re-read score; "
                          "reread_edited: files the last window both re-read and edited first. "
                          "Same as --set carry_order=NAME")
+    ap.add_argument("--carry-whole", nargs="?", const="64000", metavar="TOKENS",
+                    help="Whole-file Carry-over (terminus-2; Codex on docker): a file re-read in consecutive windows is handed over "
+                         "complete, read from disk at the compaction, within this token budget for all such files "
+                         "(default 64000 when given without a value; off when absent). A file is never cut: one that "
+                         "does not fit stays with --carry-files. Same as --set carry_whole=N")
+    ap.add_argument("--carry-whole-after", type=int, default=None, metavar="N",
+                    help="Whole-file Carry-over: consecutive windows that must re-read a file before it is carried "
+                         "whole (default 2). Same as --set carry_whole_after=N")
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                     help="extra optlimit controller field (e.g. lookahead=1, g_prior_weight=3)")
     ap.add_argument("--handoff", action="append", default=[], metavar="KEY=VALUE",
@@ -150,15 +161,31 @@ def main(argv: list[str] | None = None) -> int:
         a.set.append("rent_net_reread=true")
     if a.carry_files:
         a.set.append("carry_files=" + str(int(float(a.carry_files.lower().rstrip("k")) * (1000 if a.carry_files.lower().endswith("k") else 1))))
+    if a.carry_whole:
+        a.set.append("carry_whole=" + str(int(float(a.carry_whole.lower().rstrip("k")) * (1000 if a.carry_whole.lower().endswith("k") else 1))))
+    if a.carry_whole_after is not None:
+        if not a.carry_whole:
+            ap.error("--carry-whole-after needs --carry-whole")
+        a.set.append("carry_whole_after=" + str(a.carry_whole_after))
     if a.carry_order:
         if not a.carry_files:
             ap.error("--carry-order needs --carry-files")
         a.set.append("carry_order=" + a.carry_order)
+    if a.learn:
+        if not (a.formula or a.balance):
+            ap.error("--learn applies to --formula / --balance")
+        a.set += ["learn_lp=true", "learn_summary_out=true", "learn_gamma=true"]
     dataset, hours, cont, bench = resolve_benchmark(a)
     harbor, _ = benchmark_extras(a)
     if harbor != DEFAULT_HARBOR:
-        ap.error(f"benchmark {bench!r} runs on the Harbor {harbor} profile, where the in-process terminus-2 adapter "
-                 "(patched LHTB fork) is not available: use --harness terminus-2-proxy | claude-code | codex")
+        # stock Harbor: the adapter runs (it keeps the usage of each response itself), but the trial-loop
+        # options and the hand-off prompt hooks are patches of the LHTB fork
+        fork_only = [n for n, v in (("--handoff", [h for h in a.handoff if h != "mode=single"]),
+                                    ("--verifier-feedback", a.verifier_feedback), ("--hb-env", a.hb_env),
+                                    ("--native-threshold", a.native_threshold is not None)) if v]
+        if fork_only:
+            ap.error(f"benchmark {bench!r} runs on the Harbor {harbor} profile (stock Harbor): "
+                     f"{', '.join(fork_only)} need the patched LHTB fork")
 
     if a.native_threshold is not None:
         cond, agent_kind = f"thr{a.native_threshold // 1000}k", "stock"
@@ -273,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
               + (f" reasoning_effort={a.reasoning_effort}" if a.reasoning_effort else "")
               + (f" api_base={a.api_base}" if a.api_base else "") + "\n"
               + (f"# env: {' '.join(env_lines)}\n" if env_lines else "")
+              + harbor_header_line(harbor)
               + "# run: bash scripts/run_job.sh " + _repo_relative(out) + "\n")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(header + yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))

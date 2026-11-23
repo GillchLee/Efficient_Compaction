@@ -33,7 +33,9 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from . import dialects as D
+from .carry import CHARS_PER_TOKEN, whole_block
 from .controller import ControllerConfig, LimitController
+from .envexec import DockerExec
 from .reread import RereadTracker
 
 logger = logging.getLogger("optlimit")
@@ -77,6 +79,9 @@ class ProxyConfig:
     # usage would be missing from the learned O_s / gamma of the trial. When on, such an
     # orphan summary call is attributed to the session most recently told to compact.
     attach_orphan_summaries: bool = False
+    # Whole-file Carry-over: `await env_run(client_address, shell_command) -> (return code, stdout)` runs
+    # a read-only command in the task environment of the client.  None = docker (optlimit/envexec.py).
+    env_run: object | None = None
 
 
 class Recorder:
@@ -132,6 +137,7 @@ def create_app(cfg: ProxyConfig) -> Starlette:
     last_cost: dict[str, float] = {}          # cost of the session's last main call (read units)
     pre_started: dict[str, bool] = {}         # tracker window already advanced for the window that is starting
     carry: dict[str, str] = {}                # carry-over block of the session's current window
+    env_run = cfg.env_run or DockerExec().run
     rejects: dict[str, int] = {}
     reject_ts: dict[str, float] = {}
 
@@ -257,7 +263,21 @@ def create_app(cfg: ProxyConfig) -> Starlette:
                             ctl.note_reread(key, turns, cost)
                         meta["reread_window"] = {"window": w, "turns": turns, "cost": round(cost)}
                         cc = cfg.controller
-                        carry[key] = tr.carry_block(cc.carry_files, cc.carry_item_tokens, order=cc.carry_order) if cc.carry_files > 0 else ""
+                        whole = ""
+                        if cc.carry_whole > 0 and w >= 1:
+                            # files re-read window after window: complete, from the client's disk
+                            ip = request.client.host if request.client else ""
+                            try:
+                                whole, wfiles, wskip = await whole_block(
+                                    tr, lambda cmd: env_run(ip, cmd), cc.carry_whole, cc.carry_whole_after,
+                                    order=cc.carry_order)
+                                meta["carry_whole"] = {"chars": len(whole), "files": wfiles, "left_out": wskip[:40]}
+                            except Exception:
+                                logger.exception("whole-file carry failed; window starts without it")
+                                whole = ""
+                        ctl.note_carry(key, len(whole) / CHARS_PER_TOKEN)
+                        snap = tr.carry_block(cc.carry_files, cc.carry_item_tokens, order=cc.carry_order) if cc.carry_files > 0 else ""
+                        carry[key] = "\n\n".join(x for x in (whole, snap) if x)
                         if carry[key]:
                             meta["carry"] = {"chars": len(carry[key]), "files": sorted(tr.carried)[:40]}
                     if carry.get(key) and dialect.inject_carry(body, carry[key]):
@@ -332,6 +352,7 @@ def create_app(cfg: ProxyConfig) -> Starlette:
                         if w >= 1:
                             ctl.note_reread(key, turns, cost)
                         carry[key] = ""
+                        ctl.note_carry(key, 0.0)
                 state["signal"] = signal_for(d, int(u["prompt"]), key if kind == "main" else None)
                 if d.compact_now:
                     logger.info("compact_now %s session=%s turn=%d P=%d L*=%.0f g=%.0f (%s)",
