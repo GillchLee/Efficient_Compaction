@@ -113,6 +113,11 @@ class ControllerConfig:
     reread_cost: bool | None = None  # deprecated alias of reread_charge (older configs / spec files)
     reread_turns: float = 3.5
     reread_turn_out: float = 300.0
+    # How long the prior stays in R (and in r of the Productive-turn Charge).  0 (default): for the whole
+    # session, as one window among the last `learn_recent` -- a prior measured on another model then keeps
+    # 1/4 of the weight.  N > 0: only until N windows have been observed; from then on R is the plain mean
+    # of the last `learn_recent` observed windows.
+    reread_prior_windows: int = 0
     # "Productive-turn Charge" (default off): minimise the cost per productive turn, i.e. per turn that
     # is not a re-read.  A task needs a number of productive turns; a window of K turns delivers K - r of
     # them, so the total cost is proportional to W(K) / (K - r), not W(K) / K.  That optimum is the same
@@ -297,15 +302,24 @@ class LimitController:
         if c.reread_productive:
             n = int(c.learn_recent or 0)
             tobs = s.rr_turn_obs[-n:] if n > 0 else s.rr_turn_obs
-            r = max((c.reread_turns + sum(tobs)) / (1 + len(tobs)), 0.0)
+            if self._reread_prior_dropped(s):
+                r = max(sum(tobs) / len(tobs), 0.0)
+            else:
+                r = max((c.reread_turns + sum(tobs)) / (1 + len(tobs)), 0.0)
             E = self.refetch_premium(s)
             return E + self.productive_charge(replace(p, summary_fixed=p.summary_fixed + E) if E > 0 else p, r)
         L = best_threshold(p)
         per_turn = (f(L, p) if L is not None and math.isfinite(f(L, p)) else p.L0 + p.Lp) + c.beta * c.reread_turn_out
         prior = c.reread_turns * per_turn
         obs = s.rr_cost_obs[-int(c.learn_recent):] if c.learn_recent and c.learn_recent > 0 else s.rr_cost_obs
+        if self._reread_prior_dropped(s):
+            return max(sum(obs) / len(obs), 0.0)
         # re-reads per window vary a lot (0 .. 10+), so the prior keeps the weight of one window
         return max((prior + sum(obs)) / (1 + len(obs)), 0.0)
+
+    def _reread_prior_dropped(self, s: SessionState) -> bool:
+        n = int(self.cfg.reread_prior_windows or 0)
+        return n > 0 and len(s.rr_cost_obs) >= n
 
     def refetch_premium(self, s: SessionState) -> float:
         """Re-fetch premium: (alpha - 1) * W, W = tokens re-read calls brought back per window (read units)."""
@@ -606,6 +620,8 @@ def config_from_spec(spec: dict | None, config_dir=None) -> ControllerConfig:
                     summary_out=p.get("summary_out"))
         if p.get("L0") is not None:
             base.update(L0_mode="fixed", L0_fixed=float(p["L0"]))
+        if p.get("reread_turns") is not None:   # calibrated rows (optlimit/calibrate.py)
+            base.update(reread_turns=float(p["reread_turns"]))
     if prices:
         pr = load_prices(prices, config_dir)
         base.update(alpha=pr.alpha, beta=pr.beta)

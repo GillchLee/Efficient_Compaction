@@ -597,3 +597,43 @@ async def test_proxy_adds_the_reorientation_note_in_fixed_mode_too(tmp_path):
     recs = [json.loads(l) for l in open(tmp_path / "log.jsonl")]
     assert recs[2]["reorient"] == "parallel" and recs[2]["carry_injected"] is True
     assert "phase_window" not in recs[2]                             # window 0 is not a re-orientation phase
+
+
+def test_reread_prior_is_dropped_after_n_windows():
+    """reread_prior_windows = N: the prior counts until N windows were observed, then only observations."""
+    from optlimit.controller import LimitController, config_from_spec
+    spec = {"mode": "formula", "prior": "codex-luna-medium", "prices": "gpt-6-luna"}
+    keep = LimitController(config_from_spec(spec))
+    drop = LimitController(config_from_spec({**spec, "reread_prior_windows": 3}))
+    for ctl in (keep, drop):
+        s = ctl.session("k")
+        p = ctl.params(s)
+        prior = ctl.reread_term(s, p)
+        for i in range(2):
+            ctl.note_reread("k", 1, 10_000.0)
+        assert ctl.reread_term(s, p) == pytest.approx((prior + 20_000.0) / 3)   # prior still in: 2 < 3 windows
+        ctl.note_reread("k", 1, 10_000.0)
+    assert drop.reread_term(drop.session("k"), drop.params(drop.session("k"))) == pytest.approx(10_000.0)
+    s = keep.session("k")
+    assert keep.reread_term(s, keep.params(s)) > 10_000.0
+
+
+def test_calibration_row_from_a_pilot_log(tmp_path):
+    """optlimit.calibrate: measured values from a proxy log; what the pilot lacks comes from the base row."""
+    import json
+    from optlimit import calibrate
+    rows = []
+    def main(p, c, **kw): rows.append({"status": 200, "kind": "main", "session": "s", "prompt": p, "cached": c, **kw})
+    for i in range(8):
+        main(10_000 + 4_000 * i, 9_000 + 4_000 * i)
+    rows.append({"status": 200, "kind": "summary", "session": "s", "prompt": 30_000, "cached": 3_000, "output": 2_500})
+    main(12_000, 9_500, reread_window={"window": 0, "turns": 4, "cost": 1})
+    main(16_000, 12_000)
+    log = tmp_path / "pilot.proxy.jsonl"
+    log.write_text("\n".join(json.dumps(r) for r in rows))
+    got = calibrate.measure(calibrate.read_log(log), alpha=40)
+    assert got["g"] == 4_000 and got["L0"] == 9_500 and got["Lp"] == 2_500 and got["summary_out"] == 2_500
+    assert got["gamma"] == pytest.approx(1 + 39 * 0.9) and got["reread_turns"] == 4 and got["_n"]["compactions"] == 1
+    row = calibrate.prior_row(calibrate.measure([r for r in rows if r["kind"] == "main"][:8], 40),
+                              {"Lp": 1700, "L0": 11500, "g": 2000, "m": 1, "gamma": 1.4, "summary_out": 1700}, "t")
+    assert row["g"] == 4_000 and row["Lp"] == 1700 and "Lp" in row["_from_base"] and "g" not in row["_from_base"]
